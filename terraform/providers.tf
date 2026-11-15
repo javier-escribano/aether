@@ -29,11 +29,41 @@ terraform {
       version = "~> 0.12"
     }
   }
+
+  # Optional remote state (recommended for shared / multi-machine use): the local
+  # tfstate holds cleartext credentials. Uncomment and fill in for an encrypted,
+  # access-controlled azurerm backend. [SECURITY.md H-5]
+  # backend "azurerm" {
+  #   resource_group_name  = "my-tfstate-rg"
+  #   storage_account_name = "mytfstatesa"
+  #   container_name       = "tfstate"
+  #   key                  = "azure-attack-range.tfstate"
+  #   use_azuread_auth     = true
+  # }
 }
 
-# Reuses the context from `az login --tenant <test>` (see docs/00-setup.md).
-provider "azuread" {}
+# Pinned to the TEST tenant/subscription (see variables.tf). Terraform refuses to
+# run against any other tenant; azrange.ps1 also cross-checks the active az context.
+provider "azuread" {
+  tenant_id = var.expected_tenant_id
+}
 
 provider "azurerm" {
-  features {}
+  tenant_id       = var.expected_tenant_id
+  subscription_id = var.expected_subscription_id # null -> active az subscription (identity-only use)
+
+  features {
+    # Disposable lab RGs: let destroy/reset delete the RG even if a student created
+    # extra resources in it at runtime (otherwise teardown fails and the leftovers
+    # keep billing). [SECURITY.md H-7]
+    resource_group {
+      prevent_deletion_if_contains_resources = false
+    }
+    # Purge the AP02 Key Vault on destroy so its SP secret does not linger in
+    # soft-delete for 7 days. [SECURITY.md L-7]
+    key_vault {
+      purge_soft_delete_on_destroy    = true
+      recover_soft_deleted_key_vaults = false
+    }
+  }
 }

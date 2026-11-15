@@ -53,12 +53,20 @@ locals {
   # try() protects the [0] when random_password.dc_admin has count 0.
   dc_admin_password = local.need_dc ? coalesce(var.dc_admin_password, try(random_password.dc_admin[0].result, null)) : null
 
+  # SEPARATE password for the VM's local admin (azrangeadmin), which disappears on DC
+  # promotion. Distinct from the domain EA so one leak is not both. [SECURITY.md L-3]
+  vm_local_admin_password = local.need_dc ? try(random_password.vm_admin[0].result, null) : null
+
   # NSG rules only if the operator supplies a CIDR (secure-by-default). Never 0.0.0.0/0.
-  nsg_rules = local.need_dc && var.admin_source_cidr != null ? [
-    { name = "allow-rdp-inbound", priority = 1001, port = "3389" },
-    { name = "allow-winrm-inbound", priority = 1002, port = "5985" },
-    { name = "allow-winrms-inbound", priority = 1003, port = "5986" },
-  ] : []
+  # RDP (3389) only by default; WinRM (5985/5986) is NOT needed for seeding (that goes
+  # through az vm run-command, control plane) and stays behind expose_winrm. [SECURITY.md L-4]
+  nsg_rules = local.need_dc && var.admin_source_cidr != null ? concat(
+    [{ name = "allow-rdp-inbound", priority = 1001, port = "3389" }],
+    var.expose_winrm ? [
+      { name = "allow-winrm-inbound", priority = 1002, port = "5985" },
+      { name = "allow-winrms-inbound", priority = 1003, port = "5986" },
+    ] : []
+  ) : []
 }
 
 # ------------------------------------------------------------------
@@ -110,6 +118,17 @@ resource "random_password" "lowpriv" {
   override_special = "!#$%*()-_=+"
 }
 
+# VM local admin (azrangeadmin), distinct from the domain EA. [SECURITY.md L-3]
+resource "random_password" "vm_admin" {
+  count            = local.need_dc ? 1 : 0
+  length           = 24
+  min_lower        = 1
+  min_upper        = 1
+  min_numeric      = 1
+  min_special      = 1
+  override_special = "!#$%*()-_=+"
+}
+
 # ------------------------------------------------------------------
 # Container resource group (blast radius scoped to the RG; reset = destroy).
 # ------------------------------------------------------------------
@@ -144,8 +163,11 @@ resource "azurerm_subnet" "ap05" {
   address_prefixes     = ["10.105.1.0/24"]
 }
 
+# Public IP only when the operator supplies admin_source_cidr (i.e. wants RDP). With
+# the null default there is NO public IP: seeding/verify go through az vm run-command
+# (control plane), and the serial console works via boot_diagnostics. [SECURITY.md M-7]
 resource "azurerm_public_ip" "ap05" {
-  count               = local.need_dc ? 1 : 0
+  count               = local.need_dc && var.admin_source_cidr != null ? 1 : 0
   name                = "${var.lab_prefix}-ap05-pip"
   location            = azurerm_resource_group.ap05[0].location
   resource_group_name = azurerm_resource_group.ap05[0].name
@@ -188,7 +210,7 @@ resource "azurerm_network_interface" "ap05" {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.ap05[0].id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.ap05[0].id
+    public_ip_address_id          = var.admin_source_cidr != null ? azurerm_public_ip.ap05[0].id : null
   }
 }
 
@@ -212,9 +234,13 @@ resource "azurerm_windows_virtual_machine" "dc" {
   size                = var.vm_size
 
   admin_username = local.admin_username
-  admin_password = local.dc_admin_password
+  admin_password = local.vm_local_admin_password
 
   network_interface_ids = [azurerm_network_interface.ap05[0].id]
+
+  # Serial console / boot diagnostics (managed storage), so the DC is reachable
+  # even with admin_source_cidr=null and no public IP. [SECURITY.md M-7]
+  boot_diagnostics {}
 
   # Managed identity (system-assigned): the Azure Monitor Agent (AMA, in
   # monitoring.tf) authenticates to Azure Monitor with the VM's MI. WITHOUT
@@ -251,7 +277,7 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "dc" {
   enabled            = true
 
   daily_recurrence_time = var.auto_shutdown_time
-  timezone              = "W. Europe Standard Time"
+  timezone              = var.auto_shutdown_timezone
 
   notification_settings {
     enabled = false

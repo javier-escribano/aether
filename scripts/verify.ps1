@@ -38,8 +38,14 @@ Test-Ok 'Base users created' ($users -and $users.Count -gt 0) "($($users.Count) 
 # 2. AP01: app + consent policy
 if ($appId -and $appId -ne 'null') {
     try { Import-Module Microsoft.Graph.Applications, Microsoft.Graph.Identity.SignIns -ErrorAction Stop } catch {}
-    if (-not (Get-MgContext)) {
-        Connect-MgGraph -Scopes 'Application.Read.All', 'Policy.Read.All' -NoWelcome
+    # Pin Graph to the active az tenant so we never read a different tenant's
+    # consent policy (the Graph token cache is independent of az). [SECURITY.md H-1]
+    $azTid = az account show --query tenantId -o tsv 2>$null
+    $ctx = Get-MgContext
+    if (-not $ctx -or ($azTid -and $ctx.TenantId -ne $azTid)) {
+        $cArgs = @{ Scopes = @('Application.Read.All', 'Policy.Read.All'); NoWelcome = $true }
+        if ($azTid) { $cArgs['TenantId'] = $azTid }
+        Connect-MgGraph @cArgs
     }
     $app = Get-MgServicePrincipal -Filter "appId eq '$appId'" -ErrorAction SilentlyContinue
     Test-Ok 'AP01 app deployed' ($null -ne $app) "appId=$appId"

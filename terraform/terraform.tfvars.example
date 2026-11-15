@@ -1,11 +1,25 @@
 # Copy to terraform.tfvars and edit. terraform.tfvars is in .gitignore (not versioned).
 
 tenant_domain = "azrangelab.onmicrosoft.com"   # <-- YOUR TEST tenant
-lab_prefix    = "azrange"
-user_count    = 5
+
+# Safety pin: Terraform refuses to deploy anywhere else, and azrange.ps1 verifies
+# the active az session matches. Find them with:
+#   az account show --query '{tenant:tenantId, sub:id}' -o json
+expected_tenant_id = "00000000-0000-0000-0000-000000000000" # <-- YOUR TEST tenant id (GUID), REQUIRED
+# expected_subscription_id = "00000000-0000-0000-0000-000000000000"  # <-- TEST subscription id; leave commented for identity-only (AP01/03/04)
+
+lab_prefix = "azrange"
+user_count = 5
 
 # Azure region for AP02/AP05/AP07/AP08 (only used if enable_ap02, enable_ap05, enable_ap07, or enable_ap08):
 location = "westeurope"
+
+# Cost controls (optional):
+# auto_shutdown_time     = "2200"                      # HHmm, when the VMs auto-deallocate
+# auto_shutdown_timezone = "W. Europe Standard Time"   # set YOUR timezone (Windows tz id)
+# law_daily_cap_gb       = 0.5                          # daily ingestion cap on the lab's Log Analytics
+# budget_monthly_amount  = 20                           # optional Cost Management budget + email alerts
+# budget_alert_emails    = ["you@example.com"]          # required if budget_monthly_amount is set
 
 # --- Active attack paths ---
 # Recommended for the first deployment: only AP01 (identity, no cost).
@@ -14,6 +28,8 @@ enable_ap01 = true
 # AP02 deploys VM + Key Vault + storage: BILLS compute.
 # Enable it only in a test tenant/subscription and run `azrange.ps1 destroy` when done.
 enable_ap02 = false
+# AP02 SSH is open to the Internet by design (initial-access lesson). To lock it to you:
+# ap02_ssh_source_cidr = "203.0.113.10/32"
 
 # AP03 (identity): low-privilege owner over a role-assignable group → PRA → Global Admin.
 # Cost ~$0 but REQUIRES Entra ID P1 (role-assignable groups), NOT pure Entra Free.
@@ -65,6 +81,12 @@ enable_ap07 = false
 #   "account_key" → primary_access_key (full control, more severe).
 leak_mode = "sas"
 
+# AP07 storage firewall: by default the vulnerable account is reachable ONLY from
+# admin_source_cidr (your IP) — the anonymous-access lesson works for you, but the
+# Internet cannot abuse your subscription. Set admin_source_cidr (AP05 section below)
+# even if you only run AP07. Set this true to expose it to everyone on purpose:
+# ap07_internet_exposed = false
+
 # AP07 telemetry (StorageBlobLogs via diagnostic setting → Log Analytics).
 # true = 'Detect' testable end-to-end (ingestion << 0.1 GB/day). false = no
 # ingestion (zero cost; assumes an external SIEM). Reuses
@@ -111,6 +133,8 @@ collect_automation_logs = true
 # YOUR public /32 IP for RDP/WinRM to the DC. NEVER 0.0.0.0/0 (a DC is not exposed to
 # the Internet). Leave it undefined (null) to open no ports (Bastion/serial).
 # admin_source_cidr = "203.0.113.10/32"
+# Also open WinRM (5985/5986) to that CIDR (default: RDP only; seeding uses run-command).
+# expose_winrm = false
 
 # Domain Administrator password (= EA that seeds/remediates ESC1).
 # Leave it empty/undefined → the module generates a random_password. NEVER a real password.

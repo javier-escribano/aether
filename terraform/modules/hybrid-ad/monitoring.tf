@@ -41,6 +41,7 @@ resource "azurerm_log_analytics_workspace" "ap05" {
   resource_group_name = azurerm_resource_group.ap05[0].name
   sku                 = "PerGB2018"
   retention_in_days   = 31
+  daily_quota_gb      = var.law_daily_cap_gb
 }
 
 # DCR: collects ONLY the 5 relevant EventIDs from the DC/CA Security channel.

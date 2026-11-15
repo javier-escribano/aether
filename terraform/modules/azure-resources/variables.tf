@@ -14,6 +14,18 @@ variable "location" {
   default     = "westeurope"
 }
 
+variable "auto_shutdown_time" {
+  description = "AP02 - daily auto-shutdown time (HHmm) for the pivot VM. Cost discipline."
+  type        = string
+  default     = "2200"
+}
+
+variable "auto_shutdown_timezone" {
+  description = "AP02 - time zone for auto_shutdown_time (Windows tz id)."
+  type        = string
+  default     = "W. Europe Standard Time"
+}
+
 variable "tenant_domain" {
   description = "AP08 - TEST tenant domain (e.g. azrangelab.onmicrosoft.com) for the UPN of the attacker azuread_user. Wired by the root; null when AP08 is unused (the module does not create the user with enable_ap08=false)."
   type        = string
@@ -24,6 +36,17 @@ variable "enable_ap02" {
   description = "AP02 - over-privileged Managed Identity -> Key Vault (Azure, low cost)."
   type        = bool
   default     = false
+}
+
+variable "ap02_ssh_source_cidr" {
+  description = "AP02 - source allowed to reach the pivot VM's SSH (port 22). Default '*' (the deliberate 'SSH open to the Internet' initial-access lesson). Set your /32 to lock it to you. [SECURITY.md L-5]"
+  type        = string
+  default     = "*"
+
+  validation {
+    condition     = var.ap02_ssh_source_cidr == "*" || can(cidrhost(var.ap02_ssh_source_cidr, 0))
+    error_message = "ap02_ssh_source_cidr must be '*' (default) or a valid CIDR (e.g. your /32)."
+  }
 }
 
 # ------------------------------------------------------------------
@@ -53,20 +76,38 @@ variable "collect_storage_logs" {
 }
 
 variable "existing_log_analytics_workspace_id" {
-  description = "AP07/AP08 - resource ID of an EXISTING Log Analytics/Sentinel to point the blob diagnostic setting (AP07) and/or the Automation Account diagnostic setting (AP08) at. If provided, the module does NOT create its own workspace (reuses the shared root variable with AP05)."
+  description = "AP07/AP08 - resource ID of an EXISTING Log Analytics/Sentinel to point the blob diagnostic setting (AP07) and/or the Automation Account diagnostic setting (AP08) at. If provided, the module does NOT create its own workspace (reuses the shared root variable with AP05). Prefer a DEDICATED lab workspace, never production Sentinel."
   type        = string
   default     = null
 }
 
-variable "sas_expiry_years" {
-  description = "AP07 - lifetime (in years) of the leaked over-scoped account SAS; 10 by default to dramatize the 'long-lived SAS' lesson. Only used when leak_mode='sas'."
+variable "law_daily_cap_gb" {
+  description = "Daily ingestion cap (GB) on the lab's own Log Analytics workspaces (AP07/AP08), bounding the bill. Default 0.5. [SECURITY.md M-5]"
   type        = number
-  default     = 10
+  default     = 0.5
+}
+
+variable "sas_expiry_years" {
+  description = "AP07 - lifetime (in years) of the leaked over-scoped account SAS. Default 1: still an egregiously long-lived SAS (that is the lesson) but far less of a liability than the old 10. The REAL exposure guard is the storage firewall (admin_source_cidr / ap07_internet_exposed). Only used when leak_mode='sas'."
+  type        = number
+  default     = 1
 
   validation {
     condition     = var.sas_expiry_years > 0
     error_message = "sas_expiry_years must be greater than 0."
   }
+}
+
+variable "admin_source_cidr" {
+  description = "AP07 - operator IP/CIDR allowed through the storage firewall (default_action=Deny). The anonymous-access lesson still works FROM THIS IP; the rest of the Internet is blocked. Must be your CURRENT public IP (the one running terraform). Wired from the root (shared with AP05)."
+  type        = string
+  default     = null
+}
+
+variable "ap07_internet_exposed" {
+  description = "AP07 - set true to drop the storage firewall and expose the vulnerable account to the WHOLE Internet (the original behavior). Default false scopes it to admin_source_cidr, protecting the operator's subscription from third-party abuse."
+  type        = bool
+  default     = false
 }
 
 # ------------------------------------------------------------------

@@ -52,7 +52,10 @@ resource "azuread_application" "ap01" {
   count        = var.enable_ap01 ? 1 : 0
   display_name = "${var.lab_prefix}-ap01-NewsletterSync"
 
-  sign_in_audience = "AzureADMultipleOrgs"
+  # Single-tenant: the illicit-consent lesson works entirely within the lab tenant,
+  # and this avoids leaving a consent-phishing app + SP/grants in OTHER tenants if
+  # someone opens the consent URL while signed into a different org. [SECURITY.md M-8]
+  sign_in_audience = "AzureADMyOrg"
 
   required_resource_access {
     resource_app_id = local.graph_app_id

@@ -2,6 +2,12 @@ output "user_principal_names" {
   value = azuread_user.lab[*].user_principal_name
 }
 
+output "lab_user_credentials" {
+  description = "UPN -> password for the base lab users. SENSITIVE output so you can read them with 'terraform output -json lab_user_credentials' instead of dumping the whole (toxic) state. [SECURITY.md H-5]"
+  sensitive   = true
+  value       = { for i, u in azuread_user.lab : u.user_principal_name => random_password.user[i].result }
+}
+
 output "ap01_app_id" {
   value = var.enable_ap01 ? azuread_application.ap01[0].client_id : null
 }

@@ -4,6 +4,38 @@
 variable "tenant_domain" {
   description = "TEST tenant domain (e.g. azrangelab.onmicrosoft.com). NEVER the corporate one."
   type        = string
+
+  validation {
+    condition     = endswith(var.tenant_domain, ".onmicrosoft.com")
+    error_message = "tenant_domain must be the test tenant's initial .onmicrosoft.com domain."
+  }
+}
+
+# ------------------------------------------------------------------
+# Tenant/subscription pin — safety guard against deploying to the WRONG place.
+# Both providers are pinned to these, so Terraform refuses to run against any
+# other tenant, and azrange.ps1 cross-checks the active `az` context before apply.
+# Find them with:  az account show --query '{tenant:tenantId, sub:id}' -o json
+# ------------------------------------------------------------------
+variable "expected_tenant_id" {
+  description = "GUID of the TEST Entra tenant you intend to deploy into. Pinned on both providers; a mismatch with the active az session is a hard failure. REQUIRED, to stop an accidental deploy into a corporate tenant."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", var.expected_tenant_id))
+    error_message = "expected_tenant_id must be a GUID (the TEST tenant id; find it with 'az account show --query tenantId -o tsv')."
+  }
+}
+
+variable "expected_subscription_id" {
+  description = "GUID of the TEST Azure subscription for the Azure/hybrid paths. Pinned on the azurerm provider when set. Leave null for identity-only use (AP01/AP03/AP04); the azurerm provider then follows the active az subscription."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.expected_subscription_id == null || can(regex("^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", var.expected_subscription_id))
+    error_message = "expected_subscription_id must be a GUID or null."
+  }
 }
 
 variable "lab_prefix" {
@@ -116,6 +148,12 @@ variable "collect_storage_logs" {
   default     = true
 }
 
+variable "ap07_internet_exposed" {
+  description = "AP07 — false (default): the vulnerable storage is firewalled to admin_source_cidr, so only YOU reach the anonymous access (the lesson still works, third parties cannot abuse your subscription). true: expose it to the whole Internet on purpose."
+  type        = bool
+  default     = false
+}
+
 variable "enable_ap08" {
   description = "AP08 — Automation Account runbook → RBAC escalation (Azure, ~zero cost, NO VM): an Automation Account with an over-privileged system-assigned MI (UAA/Owner over the RG) + a low-priv attacker (Automation Contributor) who starts a runbook running AS the MI → New-AzRoleAssignment self-grants Owner of the RG. 100% declarative (no seed); the 'gun' is left loaded but Terraform NEVER fires it. The attacker's password lands in STATE (sensitive)."
   type        = bool
@@ -170,9 +208,26 @@ variable "dc_admin_password" {
 }
 
 variable "admin_source_cidr" {
-  description = "AP05 — operator /32 CIDR for RDP/WinRM to the DC. NEVER 0.0.0.0/0 (it's a DC). If null, NO inbound rule is opened (Bastion/serial-console)."
+  description = "Operator IP/CIDR allowlist. AP05: RDP/WinRM to the DC (NEVER 0.0.0.0/0; null = no inbound rule, use Bastion/serial). AP07: the storage firewall that scopes the anonymous-access lesson to you (unless ap07_internet_exposed=true). Use your CURRENT public /32."
   type        = string
   default     = null
+
+  validation {
+    condition     = var.admin_source_cidr == null || (can(cidrhost(var.admin_source_cidr, 0)) && tonumber(split("/", var.admin_source_cidr)[1]) >= 24)
+    error_message = "admin_source_cidr must be null or a valid CIDR with prefix /24 or longer (e.g. your /32). This rejects '*', 'Internet', 'Any', '0.0.0.0/0' and other wide ranges."
+  }
+}
+
+variable "expose_winrm" {
+  description = "AP05/AP06 — also open WinRM (5985/5986) to admin_source_cidr on the DC. Default false opens only RDP; seeding uses az vm run-command, so WinRM is usually unneeded."
+  type        = bool
+  default     = false
+}
+
+variable "ap02_ssh_source_cidr" {
+  description = "AP02 — source allowed to reach the pivot VM's SSH (22). Default '*' (the deliberate internet-exposed initial-access lesson). Set your /32 to lock it to you."
+  type        = string
+  default     = "*"
 }
 
 variable "domain_fqdn" {
@@ -194,7 +249,37 @@ variable "collect_security_events" {
 }
 
 variable "existing_log_analytics_workspace_id" {
-  description = "AP05/AP07/AP08 — resource ID of an EXISTING Log Analytics/Sentinel to point the DCR (AP05), the blob diagnostic setting (AP07), and/or the Automation Account one (AP08) at. If provided, the modules do NOT create their own workspace."
+  description = "AP05/AP07/AP08 — resource ID of an EXISTING Log Analytics/Sentinel to point the DCR (AP05), the blob diagnostic setting (AP07), and/or the Automation Account one (AP08) at. If provided, the modules do NOT create their own workspace. Prefer a DEDICATED lab workspace, never your production Sentinel (lab activity would raise real incidents and ingestion cost)."
   type        = string
   default     = null
+}
+
+variable "law_daily_cap_gb" {
+  description = "Daily ingestion cap (GB) on the lab's OWN Log Analytics workspaces, so a noisy run cannot run up an unbounded bill. Default 0.5. [SECURITY.md M-5]"
+  type        = number
+  default     = 0.5
+}
+
+variable "auto_shutdown_time" {
+  description = "Daily auto-shutdown time (HHmm) for the AP02/AP05/AP06 VMs. Cost discipline; deploy during the day so DCPromo is not cut off."
+  type        = string
+  default     = "2200"
+}
+
+variable "auto_shutdown_timezone" {
+  description = "Time zone for auto_shutdown_time (Windows tz id, e.g. 'Eastern Standard Time'). Align the shutdown to YOUR workday, independent of var.location. [SECURITY.md L-8]"
+  type        = string
+  default     = "W. Europe Standard Time"
+}
+
+variable "budget_monthly_amount" {
+  description = "Optional monthly Cost Management budget (in your billing currency) on the TEST subscription, with 80%/100% email alerts. null (default) = no budget created. [SECURITY.md M-6]"
+  type        = number
+  default     = null
+}
+
+variable "budget_alert_emails" {
+  description = "Emails that receive the budget alerts (required if budget_monthly_amount is set)."
+  type        = list(string)
+  default     = []
 }

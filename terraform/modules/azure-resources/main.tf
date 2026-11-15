@@ -122,7 +122,7 @@ resource "azurerm_network_security_group" "ap02" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "22"
-    source_address_prefix      = "*"
+    source_address_prefix      = var.ap02_ssh_source_cidr # default "*" (teaching); set your /32 to lock it down [SECURITY.md L-5]
     destination_address_prefix = "*"
   }
 }
@@ -201,8 +201,8 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "web" {
   location           = azurerm_resource_group.ap02[0].location
   enabled            = true
 
-  daily_recurrence_time = "2200"
-  timezone              = "W. Europe Standard Time"
+  daily_recurrence_time = var.auto_shutdown_time
+  timezone              = var.auto_shutdown_timezone
 
   notification_settings {
     enabled = false

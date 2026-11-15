@@ -34,12 +34,17 @@ module "azure_resources" {
   tenant_domain = var.tenant_domain
 
   # Attack paths that live in the Azure resource layer
-  enable_ap02 = var.enable_ap02
+  enable_ap02            = var.enable_ap02
+  ap02_ssh_source_cidr   = var.ap02_ssh_source_cidr
+  auto_shutdown_time     = var.auto_shutdown_time
+  auto_shutdown_timezone = var.auto_shutdown_timezone
 
   # AP07 — Public storage / SAS leak (~zero cost, no VM)
-  enable_ap07          = var.enable_ap07
-  leak_mode            = var.leak_mode
-  collect_storage_logs = var.collect_storage_logs
+  enable_ap07           = var.enable_ap07
+  leak_mode             = var.leak_mode
+  collect_storage_logs  = var.collect_storage_logs
+  admin_source_cidr     = var.admin_source_cidr     # [SECURITY.md H-4] firewall the anonymous-access lesson to your IP
+  ap07_internet_exposed = var.ap07_internet_exposed # true = expose to the whole Internet on purpose
 
   # AP08 — Automation Account runbook → RBAC escalation (~zero cost, no VM)
   enable_ap08             = var.enable_ap08
@@ -50,6 +55,7 @@ module "azure_resources" {
   # LAW shared with AP05: if provided, the module does not create its own workspace
   # (reused by the AP07 and AP08 diagnostic settings).
   existing_log_analytics_workspace_id = var.existing_log_analytics_workspace_id
+  law_daily_cap_gb                    = var.law_daily_cap_gb
 }
 
 # ------------------------------------------------------------------
@@ -68,10 +74,14 @@ module "hybrid_ad" {
   enable_ap05                         = var.enable_ap05
   dc_admin_password                   = var.dc_admin_password
   admin_source_cidr                   = var.admin_source_cidr
+  expose_winrm                        = var.expose_winrm
   domain_fqdn                         = var.domain_fqdn
   vm_size                             = var.vm_size
+  auto_shutdown_time                  = var.auto_shutdown_time
+  auto_shutdown_timezone              = var.auto_shutdown_timezone
   collect_security_events             = var.collect_security_events
   existing_log_analytics_workspace_id = var.existing_log_analytics_workspace_id
+  law_daily_cap_gb                    = var.law_daily_cap_gb
 
   # AP06 — Entra Connect / Seamless SSO (reuses the AP05 DC via need_dc).
   # domain_fqdn/domain_netbios are already inherited (domain_netbios uses the module

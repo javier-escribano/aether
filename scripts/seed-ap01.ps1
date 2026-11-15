@@ -21,6 +21,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string]$AppId,
+    [string]$TenantId,
     [switch]$Remediate,
     [switch]$PreConsent,
     [string]$VictimUpn
@@ -34,21 +35,44 @@ $LegacyUserConsent = 'ManagePermissionGrantsForSelf.microsoft-user-default-legac
 Import-Module Microsoft.Graph.Identity.SignIns -ErrorAction Stop
 Import-Module Microsoft.Graph.Applications   -ErrorAction Stop
 
-Connect-MgGraph -Scopes @(
-    'Policy.ReadWrite.Authorization',
-    'DelegatedPermissionGrant.ReadWrite.All',
-    'Application.Read.All'
-) -NoWelcome
+# Pin the Graph connection to the lab tenant so this never changes the consent
+# policy of a different (e.g. corporate) tenant. The Graph token cache is separate
+# from az CLI, so without -TenantId it could land elsewhere. [SECURITY.md H-1]
+$connectArgs = @{
+    Scopes    = @('Policy.ReadWrite.Authorization', 'DelegatedPermissionGrant.ReadWrite.All', 'Application.Read.All')
+    NoWelcome = $true
+}
+if ($TenantId) { $connectArgs['TenantId'] = $TenantId }
+Connect-MgGraph @connectArgs
+if ($TenantId -and (Get-MgContext).TenantId -ne $TenantId) {
+    throw "Microsoft Graph connected to tenant $((Get-MgContext).TenantId), not the expected $TenantId. Aborting so the wrong tenant's consent policy is not modified."
+}
+
+# Back up / restore the tenant's ORIGINAL consent policy so remediation restores it
+# instead of wiping every assigned policy (which would also drop RSC/Teams grants). [SECURITY.md M-1]
+$BackupFile = Join-Path $PSScriptRoot 'seed-output-ap01.json'   # gitignored
+$current = @((Get-MgPolicyAuthorizationPolicy).DefaultUserRolePermissions.PermissionGrantPoliciesAssigned)
 
 if ($Remediate) {
-    Write-Host '[*] Remediating: disabling user consent...' -ForegroundColor Green
-    Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
-        PermissionGrantPoliciesAssigned = @()   # empty = no user can consent
+    if (Test-Path $BackupFile) {
+        $orig = @((Get-Content $BackupFile -Raw | ConvertFrom-Json).policies | Where-Object { $_ })
+        Write-Host "[*] Remediating: restoring the original consent policy ($($orig.Count) assigned)..." -ForegroundColor Green
+        Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{ PermissionGrantPoliciesAssigned = $orig }
     }
-    Write-Host '[+] user-consent disabled. AP01 remediated.' -ForegroundColor Green
+    else {
+        $kept = @($current | Where-Object { $_ -ne $LegacyUserConsent })
+        Write-Host "[*] Remediating: removing the permissive legacy policy (no backup; keeping $($kept.Count) other policy/ies)..." -ForegroundColor Green
+        Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{ PermissionGrantPoliciesAssigned = $kept }
+    }
+    Write-Host '[+] user-consent restored to a safe state. AP01 remediated.' -ForegroundColor Green
     return
 }
 
+# Save the original ONCE, before we pollute it with the legacy policy.
+if (-not (Test-Path $BackupFile) -and ($current -notcontains $LegacyUserConsent)) {
+    @{ policies = $current } | ConvertTo-Json -Depth 5 | Set-Content -Path $BackupFile -Encoding UTF8
+    Write-Host "[i] Saved the original consent policy to $BackupFile (for clean remediation)." -ForegroundColor DarkGray
+}
 Write-Host '[*] Seeding VULNERABLE state: allowing user consent to all apps...' -ForegroundColor Yellow
 Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
     PermissionGrantPoliciesAssigned = @($LegacyUserConsent)

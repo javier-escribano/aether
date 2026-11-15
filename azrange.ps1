@@ -10,6 +10,7 @@
     destroy  : removes EVERYTHING the range created.
     verify   : range health-check (see scripts/verify.ps1).
     status   : shows the Terraform outputs.
+    purge    : force-deletes lab resource groups by NAME (fallback when state is lost).
 
 .EXAMPLE
     ./azrange.ps1 deploy
@@ -19,7 +20,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet('deploy', 'reset', 'destroy', 'verify', 'status')]
+    [ValidateSet('deploy', 'reset', 'destroy', 'verify', 'status', 'purge')]
     [string]$Action,
 
     # Skip the interactive apply/destroy confirmation.
@@ -34,6 +35,17 @@ $script:Scripts = Join-Path $Root 'scripts'
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }
 
+function Get-TfvarValue($name) {
+    # Minimal reader for `name = "value"` lines in terraform.tfvars (skips comments).
+    $tfvars = Join-Path $TfDir 'terraform.tfvars'
+    if (-not (Test-Path $tfvars)) { return $null }
+    foreach ($line in Get-Content $tfvars) {
+        if ($line -match '^\s*#') { continue }
+        if ($line -match ('^\s*' + [regex]::Escape($name) + '\s*=\s*"([^"]*)"')) { return $Matches[1] }
+    }
+    return $null
+}
+
 function Assert-Prereqs {
     foreach ($tool in 'az', 'terraform') {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
@@ -43,11 +55,38 @@ function Assert-Prereqs {
     if (-not (Test-Path (Join-Path $TfDir 'terraform.tfvars'))) {
         throw "terraform/terraform.tfvars does not exist. Copy terraform.tfvars.example and edit it."
     }
-    # Safety notice: confirm the active tenant before touching anything.
-    $acct = az account show --query '{tenant:tenantId, name:name}' -o json 2>$null | ConvertFrom-Json
-    if ($acct) {
-        Write-Warn "Active tenant/subscription: $($acct.name) ($($acct.tenant))"
-        Write-Warn "Confirm this is your TEST tenant (see README, security section)."
+    # The tfstate holds cleartext credentials: warn if it would live in a synced folder. [SECURITY.md H-5]
+    if ($TfDir -match '(?i)[\\/](OneDrive|Dropbox|Google Drive)[\\/]') {
+        Write-Warn "WARNING: the repo is under a cloud-sync folder (OneDrive/Dropbox/Google Drive). terraform.tfstate holds cleartext credentials; move it out or use a remote backend (see providers.tf)."
+    }
+
+    # --- Tenant/subscription guard: refuse to run against the wrong place. [SECURITY.md C-1] ---
+    $expTenant = Get-TfvarValue 'expected_tenant_id'
+    $expSub    = Get-TfvarValue 'expected_subscription_id'
+    $domain    = Get-TfvarValue 'tenant_domain'
+
+    $acct = az account show -o json 2>$null | ConvertFrom-Json
+    if (-not $acct) {
+        throw "Could not read the active Azure context (az account show failed). Run: az login --tenant $domain"
+    }
+    Write-Warn "Active tenant:       $($acct.tenantId)  ($($acct.name))"
+    Write-Warn "Active subscription: $($acct.id)"
+
+    if ($expTenant -and $acct.tenantId -ne $expTenant) {
+        throw "TENANT MISMATCH: az is on tenant $($acct.tenantId) but terraform.tfvars pins expected_tenant_id=$expTenant. Refusing to run. Fix with 'az login --tenant $domain' (or correct expected_tenant_id)."
+    }
+    if ($expSub -and $acct.id -ne $expSub) {
+        Write-Warn "Active subscription $($acct.id) != expected_subscription_id $expSub. Terraform targets the pinned subscription; make sure this login can access it."
+    }
+    $script:ActiveTenantId = $acct.tenantId
+
+    # --- Human gate: confirm the tenant even with -AutoApprove, unless the
+    #     AZRANGE_I_UNDERSTAND env var equals the expected tenant id (automation path). ---
+    $understood = ($expTenant -and $env:AZRANGE_I_UNDERSTAND -eq $expTenant)
+    if (-not $understood) {
+        Write-Warn "About to run '$Action' with INTENTIONALLY VULNERABLE resources in tenant '$domain'."
+        $typed = Read-Host "Type the tenant domain to confirm (or set AZRANGE_I_UNDERSTAND=<tenantId> to skip)"
+        if ($typed -ne $domain) { throw "Confirmation did not match ('$typed' != '$domain'). Aborting." }
     }
 }
 
@@ -77,6 +116,32 @@ function Get-Ap05Dc { return (Get-TfRaw 'ap05_dc_vm_name') }
 # which returns null with enable_ap05=false even if the shared VM exists via AP06.
 function Get-Ap06Dc { return (Get-TfRaw 'ap06_dc_vm_name') }
 
+function Invoke-ResidueCheck {
+    # Best-effort warning about privileged directory roles still held by lab
+    # principals after reset/destroy (AP03/AP04 end with a runtime GA assignment
+    # that lives in the directory, not in Terraform state). [SECURITY.md H-3]
+    try {
+        $prefix = Get-TfvarValue 'lab_prefix'; if (-not $prefix) { $prefix = 'azrange' }
+        $ra = az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?`$expand=principal" -o json 2>$null | ConvertFrom-Json
+        $residual = @()
+        foreach ($a in @($ra.value)) {
+            $p = $a.principal
+            $name = if ($p.userPrincipalName) { $p.userPrincipalName } else { $p.displayName }
+            if ($name -and $name -like "*$prefix*") { $residual += $name }
+        }
+        if ($residual.Count -gt 0) {
+            Write-Warn "RESIDUE: lab principals still hold directory roles (clean up by hand): $(@($residual | Select-Object -Unique) -join ', ')"
+            Write-Warn "Also review 'elevateAccess' at scope '/' and any client secrets added to lab apps during the exercise."
+        }
+        else {
+            Write-Host '[+] No residual directory roles held by lab principals.' -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Warn "Could not run the residue check (Graph query failed). Manually review directory roles for '$prefix' principals and 'elevateAccess' at '/'."
+    }
+}
+
 switch ($Action) {
 
     'deploy' {
@@ -92,9 +157,13 @@ switch ($Action) {
         $appId = Get-Ap01AppId
         if ($appId) {
             Write-Step "AP01 active - completing the vulnerable condition (Graph seed)"
-            & (Join-Path $Scripts 'seed-ap01.ps1') -AppId $appId
+            & (Join-Path $Scripts 'seed-ap01.ps1') -AppId $appId -TenantId $script:ActiveTenantId
         } else {
             Write-Warn 'AP01 disabled: seed-ap01 is not run.'
+        }
+
+        if ((Get-Ap05Dc) -or (Get-Ap06Dc)) {
+            Write-Warn 'NOTE [SECURITY.md M-3]: DC secrets (EA/SSO/sync) are passed to az vm run-command as command-line parameters, visible to local process listing/EDR on THIS machine. Fine on a personal lab box; be aware on a managed/corporate machine (mitigation: Managed Run Command --protected-parameters).'
         }
 
         # AP05: seeds the ESC1 template via az vm run-command (idempotent seed,
@@ -215,6 +284,7 @@ switch ($Action) {
             Write-Warn 'AP06 disabled: seed-ap06 is not run.'
         }
 
+        Write-Warn 'COST: auto-shutdown only DEALLOCATES the VMs; disks, public IPs and Log Analytics keep a small residual bill until you run ./azrange.ps1 destroy. Consider setting budget_monthly_amount in tfvars, and always destroy when done.'
         Write-Step 'Deployment complete. Next: ./azrange.ps1 verify'
     }
 
@@ -223,7 +293,7 @@ switch ($Action) {
         $appId = Get-Ap01AppId
         if ($appId) {
             Write-Step 'Remediating AP01 (restores the safe user-consent policy)'
-            & (Join-Path $Scripts 'seed-ap01.ps1') -AppId $appId -Remediate
+            & (Join-Path $Scripts 'seed-ap01.ps1') -AppId $appId -Remediate -TenantId $script:ActiveTenantId
         }
         # AP05 is NOT pre-remediated via run-command (deliberate divergence vs AP01):
         # the vuln lives on the VM and enable_ap05=false DESTROYS it entirely (the
@@ -251,16 +321,25 @@ switch ($Action) {
         if ($AutoApprove) { $resetArgs += '-auto-approve' }
         Invoke-Tf $resetArgs
         Write-Step 'Reset done: baseline intact, vulnerabilities removed (AP05+AP06: with both flags false need_dc=false -> the shared DC is destroyed, cost->0, and with it ESC1 + AZUREADSSOACC$ + the sync account; AP07: storage+credential destroyed; AP08: Automation Account+MI+runbook and every RG-scoped runtime role assignment destroyed).'
+        Invoke-ResidueCheck
     }
 
     'destroy' {
         Assert-Prereqs
         Write-Warn 'This removes ALL of the range objects in the active tenant.'
+        # Revert the tenant-wide AP01 consent policy BEFORE the app is destroyed, so
+        # the permissive policy does not outlive the lab. [SECURITY.md H-2]
+        $appId = Get-Ap01AppId
+        if ($appId) {
+            Write-Step 'Reverting AP01 tenant consent policy (seed-ap01 -Remediate)'
+            & (Join-Path $Scripts 'seed-ap01.ps1') -AppId $appId -Remediate -TenantId $script:ActiveTenantId
+        }
         Write-Step 'terraform destroy'
         $destroyArgs = @('destroy', '-input=false')
         if ($AutoApprove) { $destroyArgs += '-auto-approve' }
         Invoke-Tf $destroyArgs
         Write-Step 'Range destroyed.'
+        Invoke-ResidueCheck
     }
 
     'verify' {
@@ -269,5 +348,26 @@ switch ($Action) {
 
     'status' {
         Invoke-Tf @('output')
+    }
+
+    'purge' {
+        # Fallback teardown when the Terraform state is lost: force-delete lab
+        # resource groups by NAME (prefix match), then flag Entra residue. [SECURITY.md L-6]
+        Assert-Prereqs
+        $prefix = Get-TfvarValue 'lab_prefix'; if (-not $prefix) { $prefix = 'azrange' }
+        Write-Warn "PURGE: force-deletes resource groups named '$prefix-*' (use only if 'destroy' cannot, e.g. lost state)."
+        $rgs = az group list --query "[?starts_with(name, '$prefix-')].name" -o tsv 2>$null
+        if ($rgs) {
+            foreach ($rg in $rgs) {
+                Write-Step "Deleting resource group $rg"
+                az group delete -n $rg --yes --no-wait | Out-Null
+                Write-Host "[+] Delete requested for $rg (async)." -ForegroundColor Green
+            }
+        }
+        else {
+            Write-Host "[i] No resource groups named '$prefix-*' found." -ForegroundColor DarkGray
+        }
+        Write-Warn "Entra objects (users/apps/groups '$prefix*', the consent policy, directory roles) are NOT removed by purge. Run seed-ap01.ps1 -Remediate for the consent policy and clean the rest by hand."
+        Invoke-ResidueCheck
     }
 }

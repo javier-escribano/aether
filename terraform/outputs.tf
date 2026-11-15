@@ -3,6 +3,12 @@ output "lab_users" {
   value       = module.entra_identity.user_principal_names
 }
 
+output "lab_user_credentials" {
+  description = "UPN -> password for the base lab users (read with 'terraform output -json lab_user_credentials' instead of dumping the toxic state). [SECURITY.md H-5]"
+  sensitive   = true
+  value       = module.entra_identity.lab_user_credentials
+}
+
 output "ap01_app_id" {
   description = "Client ID of the AP01 vulnerable app (null if AP01 is disabled)."
   value       = module.entra_identity.ap01_app_id

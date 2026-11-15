@@ -138,6 +138,25 @@ resource "azurerm_storage_account" "ap07" {
 
   # ===== Explicit MISCONFIG (inverse of the azurerm_storage_account.dsc block) =====
   allow_nested_items_to_be_public = true
+
+  # OPERATOR GUARD [SECURITY.md H-4]: scope the (deliberately) anonymous access to the
+  # operator's own IP, so the lesson is still demonstrable from your machine but the whole
+  # Internet cannot abuse the account. Set ap07_internet_exposed=true to drop the firewall.
+  dynamic "network_rules" {
+    for_each = var.ap07_internet_exposed ? [] : [1]
+    content {
+      default_action = "Deny"
+      ip_rules       = var.admin_source_cidr != null ? [trimsuffix(var.admin_source_cidr, "/32")] : []
+      bypass         = ["AzureServices"]
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.ap07_internet_exposed || var.admin_source_cidr != null
+      error_message = "AP07: set admin_source_cidr to your public IP (scopes the anonymous-access lesson to you) or ap07_internet_exposed=true to expose it to the Internet on purpose."
+    }
+  }
 }
 
 # ==================================================================
@@ -320,6 +339,7 @@ resource "azurerm_log_analytics_workspace" "ap07" {
   resource_group_name = azurerm_resource_group.ap07[0].name
   sku                 = "PerGB2018"
   retention_in_days   = 31
+  daily_quota_gb      = var.law_daily_cap_gb
 }
 
 # Diagnostic setting on blobServices/default -> StorageBlobLogs.

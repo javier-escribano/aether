@@ -22,10 +22,15 @@ variable "location" {
 }
 
 variable "dc_admin_password" {
-  description = "Password of the domain built-in Administrator (= the EA that seeds/remediates ESC1). Leave null -> random_password. NEVER a real or reused password."
+  description = "Password of the domain built-in Administrator (= the EA that seeds/remediates ESC1). Leave null -> random_password (recommended). NEVER a real or reused password: the student reaches Domain Admin, so this becomes known."
   type        = string
   sensitive   = true
   default     = null
+
+  validation {
+    condition     = var.dc_admin_password == null || length(var.dc_admin_password) >= 16
+    error_message = "dc_admin_password must be null (recommended; a random one is generated) or at least 16 characters."
+  }
 }
 
 variable "domain_fqdn" {
@@ -53,14 +58,20 @@ variable "vm_image_version" {
 }
 
 variable "admin_source_cidr" {
-  description = "Operator /32 CIDR for RDP/WinRM to the DC. NEVER 0.0.0.0/0 (it is a DC). If null, NO inbound rule is opened (Bastion/serial-console)."
+  description = "Operator IP/CIDR for RDP to the DC. If null, NO inbound rule is opened (reach the DC via the serial console / boot_diagnostics, or az vm run-command). Must be /24 or longer; '*'/'Internet'/'0.0.0.0/0' are rejected."
   type        = string
   default     = null
 
   validation {
-    condition     = var.admin_source_cidr == null || var.admin_source_cidr != "0.0.0.0/0"
-    error_message = "admin_source_cidr cannot be 0.0.0.0/0: a DC is not exposed to the Internet. Use your /32 or leave null (Bastion/serial)."
+    condition     = var.admin_source_cidr == null || (can(cidrhost(var.admin_source_cidr, 0)) && tonumber(split("/", var.admin_source_cidr)[1]) >= 24)
+    error_message = "admin_source_cidr must be null or a valid CIDR with prefix /24 or longer (e.g. your /32). This rejects '*', 'Internet', 'Any', '0.0.0.0/0' and other wide ranges."
   }
+}
+
+variable "expose_winrm" {
+  description = "AP05/AP06 - also open WinRM (5985/5986) to admin_source_cidr. Default false: only RDP (3389). Seeding and verify use az vm run-command (control plane), so WinRM is normally unnecessary."
+  type        = bool
+  default     = false
 }
 
 variable "lowpriv_user_name" {
@@ -88,15 +99,27 @@ variable "collect_security_events" {
 }
 
 variable "existing_log_analytics_workspace_id" {
-  description = "Resource ID of an EXISTING Log Analytics/Sentinel to point the DCR at. If given, the module does NOT create its own workspace."
+  description = "Resource ID of an EXISTING Log Analytics/Sentinel to point the DCR at. If given, the module does NOT create its own workspace. Prefer a DEDICATED lab workspace, never production Sentinel."
   type        = string
   default     = null
 }
 
+variable "law_daily_cap_gb" {
+  description = "Daily ingestion cap (GB) on the lab's own Log Analytics workspace, bounding the bill. Default 0.5. [SECURITY.md M-5]"
+  type        = number
+  default     = 0.5
+}
+
 variable "auto_shutdown_time" {
-  description = "Daily auto-shutdown time (HHmm, W. Europe Standard Time zone). Cost discipline (AP02 pattern). Deploy during the day so DCPromo is not cut off."
+  description = "Daily auto-shutdown time (HHmm). Cost discipline (AP02 pattern). Deploy during the day so DCPromo is not cut off."
   type        = string
   default     = "2200"
+}
+
+variable "auto_shutdown_timezone" {
+  description = "Time zone for auto_shutdown_time (Windows tz id, e.g. 'W. Europe Standard Time', 'Eastern Standard Time'). Align the shutdown to your workday regardless of the Azure region. [SECURITY.md L-8]"
+  type        = string
+  default     = "W. Europe Standard Time"
 }
 
 variable "strong_cert_binding_mode" {

@@ -25,7 +25,9 @@ The review also confirmed these good practices:
 | Status | Meaning |
 |---|---|
 | **Fixed in this release** | Already addressed in the code shipped with this release. |
-| **Recommended** | Not yet applied. The maintainer can apply it before publishing. Operators should read the impact and use the mitigations in [Operating this lab safely](#operating-this-lab-safely). |
+| **Mitigated (deeper fix documented)** | The main risk is reduced in this release. A more invasive fix is documented but deferred because it would put the lab's provisioning reliability at risk. |
+
+As of this release, every finding below is either **Fixed** or **Mitigated**. No finding remains in the Recommended state. Each finding keeps its original analysis and recommended fix for reference, followed by a **Fixed:** line describing what was done.
 
 ---
 
@@ -33,31 +35,31 @@ The review also confirmed these good practices:
 
 | # | Severity | Area | Finding | Status |
 |---|---|---|---|---|
-| C-1 | Critical | Tenant safety | Nothing hard-blocks deployment into the wrong (production) tenant or subscription | Recommended |
-| H-1 | High | Tenant safety | `seed-ap01.ps1` and `verify.ps1` connect to Microsoft Graph without pinning the tenant | Recommended |
-| H-2 | High | Teardown | `destroy` never reverts the tenant-wide user-consent policy set by AP01 | Recommended |
-| H-3 | High | Teardown / tenant | Directory roles and credentials created at runtime (AP03/AP04) survive `reset` and `destroy` | Recommended |
-| H-4 | High | Internet exposure / cost | AP07 publishes a long-lived, writable account SAS to the entire Internet | Recommended |
-| H-5 | High | Secrets | Local, unencrypted Terraform state contains a path to Global Administrator | Recommended |
-| H-6 | High | Network exposure | The `admin_source_cidr` guard only rejects the literal `0.0.0.0/0` | Recommended |
-| H-7 | High | Cost / teardown | `reset`/`destroy` fail and leave billable resources when runtime-created resources exist in a lab resource group | Recommended |
-| M-1 | Medium | Tenant policy | `seed-ap01.ps1 -Remediate` wipes all consent policies instead of restoring the original | Recommended |
-| M-2 | Medium | Supply chain | Terraform provider lockfile was not committed | **Fixed in this release** |
-| M-3 | Medium | Secrets | EA, SSO, and sync passwords are passed in cleartext via `az vm run-command` arguments | Recommended |
-| M-4 | Medium | Telemetry | Docs invite sending lab telemetry to the operator's existing Sentinel / Log Analytics workspace | Recommended |
-| M-5 | Medium | Cost | Log Analytics workspaces have no daily cap, and AP06 enables unfiltered 4662 auditing | Recommended |
-| M-6 | Medium | Cost | Auto-shutdown only deallocates the VMs. There is no budget, alert, or expiry | Recommended |
-| M-7 | Medium | Network exposure | The secure default leaves the DC unreachable (no Bastion, no boot diagnostics), and its public IP is always created | Recommended |
-| M-8 | Medium | Tenant / reputation | The AP01 app is multi-tenant (`AzureADMultipleOrgs`) | Recommended |
-| L-1 | Low | Secrets | `.gitignore` did not cover plan files, SSH keys, token caches, and similar files | **Fixed in this release** |
-| L-2 | Low | Scripts | `seed-ap06.ps1` parse bug | **Fixed in this release** |
-| L-3 | Low | Secrets | One DC password is reused for the VM local admin and Enterprise Admin, and is compiled into a plaintext DSC MOF | Recommended |
-| L-4 | Low | Network exposure | WinRM 5985/5986 are opened needlessly, and `dc_admin_password` has no strength validation | Recommended |
-| L-5 | Low | Network / cost | AP02 SSH is open to `*` with no option to restrict it, and its VM identity has Contributor on the RG | Recommended |
-| L-6 | Low | Teardown | Lost local state orphans every billable resource, and there is no name-based purge | Recommended |
-| L-7 | Low | Teardown | The AP02 Key Vault stays soft-deleted for 7 days with the service principal secret inside | Recommended |
-| L-8 | Low | Cost | Auto-shutdown time and time zone cannot be configured from the root module | Recommended |
-| L-9 | Low | Documentation | The AP05 compute cost estimate appears to use Linux pricing and omits the cost of a deallocated VM | Recommended |
+| C-1 | Critical | Tenant safety | Nothing hard-blocks deployment into the wrong (production) tenant or subscription | Fixed |
+| H-1 | High | Tenant safety | `seed-ap01.ps1` and `verify.ps1` connect to Microsoft Graph without pinning the tenant | Fixed |
+| H-2 | High | Teardown | `destroy` never reverts the tenant-wide user-consent policy set by AP01 | Fixed |
+| H-3 | High | Teardown / tenant | Directory roles and credentials created at runtime (AP03/AP04) survive `reset` and `destroy` | Fixed |
+| H-4 | High | Internet exposure / cost | AP07 publishes a long-lived, writable account SAS to the entire Internet | Fixed |
+| H-5 | High | Secrets | Local, unencrypted Terraform state contains a path to Global Administrator | Fixed |
+| H-6 | High | Network exposure | The `admin_source_cidr` guard only rejects the literal `0.0.0.0/0` | Fixed |
+| H-7 | High | Cost / teardown | `reset`/`destroy` fail and leave billable resources when runtime-created resources exist in a lab resource group | Fixed |
+| M-1 | Medium | Tenant policy | `seed-ap01.ps1 -Remediate` wipes all consent policies instead of restoring the original | Fixed |
+| M-2 | Medium | Supply chain | Terraform provider lockfile was not committed | Fixed |
+| M-3 | Medium | Secrets | EA, SSO, and sync passwords are passed in cleartext via `az vm run-command` arguments | Mitigated |
+| M-4 | Medium | Telemetry | Docs invite sending lab telemetry to the operator's existing Sentinel / Log Analytics workspace | Fixed |
+| M-5 | Medium | Cost | Log Analytics workspaces have no daily cap, and AP06 enables unfiltered 4662 auditing | Fixed |
+| M-6 | Medium | Cost | Auto-shutdown only deallocates the VMs. There is no budget, alert, or expiry | Fixed |
+| M-7 | Medium | Network exposure | The secure default leaves the DC unreachable (no Bastion, no boot diagnostics), and its public IP is always created | Fixed |
+| M-8 | Medium | Tenant / reputation | The AP01 app is multi-tenant (`AzureADMultipleOrgs`) | Fixed |
+| L-1 | Low | Secrets | `.gitignore` did not cover plan files, SSH keys, token caches, and similar files | Fixed |
+| L-2 | Low | Scripts | `seed-ap06.ps1` parse bug | Fixed |
+| L-3 | Low | Secrets | One DC password is reused for the VM local admin and Enterprise Admin, and is compiled into a plaintext DSC MOF | Mitigated |
+| L-4 | Low | Network exposure | WinRM 5985/5986 are opened needlessly, and `dc_admin_password` has no strength validation | Fixed |
+| L-5 | Low | Network / cost | AP02 SSH is open to `*` with no option to restrict it, and its VM identity has Contributor on the RG | Fixed |
+| L-6 | Low | Teardown | Lost local state orphans every billable resource, and there is no name-based purge | Fixed |
+| L-7 | Low | Teardown | The AP02 Key Vault stays soft-deleted for 7 days with the service principal secret inside | Fixed |
+| L-8 | Low | Cost | Auto-shutdown time and time zone cannot be configured from the root module | Fixed |
+| L-9 | Low | Documentation | The AP05 compute cost estimate appears to use Linux pricing and omits the cost of a deallocated VM | Fixed |
 
 ---
 
@@ -65,7 +67,7 @@ The review also confirmed these good practices:
 
 ### C-1. Nothing hard-blocks deployment into the wrong tenant or subscription
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `azrange.ps1` (`Assert-Prereqs`), `terraform/providers.tf`, `terraform/variables.tf`
 
 **What it is.** `Assert-Prereqs` in `azrange.ps1` only prints the active tenant and subscription with `Write-Warn` and then continues. It does not prompt, uses no allowlist, and does not compare anything against `var.tenant_domain`. If `az account show` fails or returns nothing (stderr is discarded), the warning silently disappears. In `terraform/providers.tf`, `provider "azuread" {}` and `provider "azurerm" { features {} }` declare no `tenant_id` or `subscription_id`. Terraform therefore uses whatever ambient context exists: the `az` session or `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` / `ARM_CLIENT_ID`, which may differ from what the warning showed. `tenant_domain` has no `validation` block and is used only to build UPNs. `-AutoApprove` also skips Terraform's own confirmation, so `deploy`, `reset`, and `destroy` can run with no human gate at all. A mismatched `tenant_domain` does not protect the operator either. Resources that do not depend on the lab users (the AP01 application, everything in AP02/AP07/AP08) are created in parallel before `azuread_user.lab` fails, which leaves a partial deployment in the wrong tenant.
@@ -87,13 +89,15 @@ Together these create privilege-escalation paths to Global Administrator in the 
 4. Add `validation { condition = endswith(var.tenant_domain, ".onmicrosoft.com") }` to `tenant_domain`.
 5. If `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` are set, verify they match the displayed context.
 
+**Fixed:** providers.tf pins `expected_tenant_id` / `expected_subscription_id`. `Assert-Prereqs` in `azrange.ps1` hard-fails on an active-tenant mismatch and requires typed confirmation (the `AZRANGE_I_UNDERSTAND` environment variable overrides it for automation). `tenant_domain` is now validated to end in `.onmicrosoft.com`.
+
 ---
 
 ## High
 
 ### H-1. Microsoft Graph connections are not pinned to the lab tenant
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `scripts/seed-ap01.ps1`, `scripts/verify.ps1`
 
 **What it is.** `seed-ap01.ps1` calls `Connect-MgGraph -Scopes ... -NoWelcome` without `-TenantId`. The Microsoft Graph PowerShell context is independent of both the `az` CLI and Terraform. It reuses a cached token or account, or opens a browser account picker where the corporate account is usually the default. The script then runs `Update-MgPolicyAuthorizationPolicy` against whichever tenant it connected to, without printing or checking which one that is. `verify.ps1` reuses any existing `Get-MgContext`, so it can report policy state from a different tenant.
@@ -102,9 +106,11 @@ Together these create privilege-escalation paths to Global Administrator in the 
 
 **Recommended fix.** Have `azrange.ps1` pass the already validated tenant ID (`seed-ap01.ps1 -TenantId $tid`). Have the seed use `Connect-MgGraph -TenantId $TenantId -ContextScope Process`, then abort unless `(Get-MgContext).TenantId -eq $TenantId`. Print the tenant before modifying the authorization policy. Apply the same pattern to `verify.ps1`.
 
+**Fixed:** `seed-ap01.ps1` and `verify.ps1` now call `Connect-MgGraph -TenantId` and verify the context tenant before touching the authorization policy.
+
 ### H-2. `destroy` never reverts the tenant-wide user-consent policy set by AP01
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `azrange.ps1` (`destroy` and `reset` branches), `scripts/seed-ap01.ps1`, `README.md`, `CONTRIBUTING.md`
 
 **What it is.** `seed-ap01.ps1` changes the authorization policy of the **entire tenant** (`PermissionGrantPoliciesAssigned = @('ManagePermissionGrantsForSelf.microsoft-user-default-legacy')`). This change is not tracked in Terraform state. Only the `reset` branch of `azrange.ps1` calls `seed-ap01.ps1 -Remediate`. The `destroy` branch only runs `terraform destroy` and does not warn about the leftover change. `reset` itself depends on the `ap01_app_id` Terraform output, so after a `destroy` that output is null and `reset` does not remediate either. The README claims that `azrange.ps1 destroy` removes everything, and `CONTRIBUTING.md` states that nothing should survive `destroy`. Both claims are false for this change.
@@ -113,9 +119,11 @@ Together these create privilege-escalation paths to Global Administrator in the 
 
 **Recommended fix.** In the `destroy` branch, run `seed-ap01.ps1 -Remediate` **before** `terraform destroy`. Remediate whenever the legacy policy is present, without depending on the `ap01_app_id` output (for example, make `-AppId` optional in `-Remediate` mode). Combine this with the restore logic in M-1. Have `verify.ps1` report this "out-of-state residue" after `destroy` as well. Correct the README claim.
 
+**Fixed:** `azrange.ps1 destroy` runs `seed-ap01.ps1 -Remediate` before `terraform destroy`.
+
 ### H-3. Directory roles and credentials created at runtime survive `reset` and `destroy`
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `azrange.ps1`, `scripts/verify.ps1`, `terraform/modules/entra-identity/main.tf`, `terraform/modules/entra-identity/ap03-role-assignable-group.tf`, `terraform/modules/entra-identity/ap04-app-credential-abuse.tf`
 
 **What it is.** The `reset` branch only sets `enable_ap01..08 = false`. The base users (`azuread_user.lab`) are not behind a flag and survive. AP03 and AP04 end with the attacker (`azrange-user1`) assigning themselves Global Administrator outside Terraform. If the role is assigned directly to the user, rather than through the AP03 group or the AP04 service principal, the assignment survives the deletion of those objects. The same applies to any app, service principal, or secret the student creates as Global Admin. Those objects carry no `lab_prefix` and are not in state. A Global Admin can also call `elevateAccess`, which grants User Access Administrator at the root (`/`) of the management-group hierarchy and therefore control of **every** subscription in the tenant. The module headers acknowledge that such objects must be cleaned up by hand. However, neither `reset`, `destroy`, nor `verify.ps1` checks for leftover privileged assignments. The "RG-scoped" guarantee for AP08 in `docs/00-setup.md` no longer holds once Global Admin has been reached via AP03/AP04.
@@ -131,9 +139,11 @@ Together these create privilege-escalation paths to Global Administrator in the 
 
 The step should remove these objects, or at least report them and exit non-zero. Add a "no lab users with Tier-0 roles outside state" check to `verify.ps1`. Optionally rotate the lab user passwords on `reset` (taint `random_password.user`). Document the mandatory manual cleanup procedure.
 
+**Fixed:** `Invoke-ResidueCheck` in `azrange.ps1` runs after `reset` and `destroy` and warns about lab principals that still hold directory roles.
+
 ### H-4. AP07 publishes a long-lived, writable account SAS to the entire Internet
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/azure-resources/ap07-storage.tf`, `terraform/modules/azure-resources/variables.tf`, `terraform/terraform.tfvars.example`, `docs/attack-paths/AP07-public-storage-leak.md`
 
 **What it is.** AP07 creates a real **account** SAS signed with the account key:
@@ -156,9 +166,11 @@ It publishes this SAS in `backup-config.json` inside a container with `container
 5. Replace the "cost ~0" wording in `terraform.tfvars.example` and the AP07 doc with an explicit warning about write and egress abuse, and recommend running `destroy` as soon as the exercise ends.
 6. Add an optional `azurerm_consumption_budget_resource_group` with alerts for the lab resource groups (see M-6).
 
+**Fixed:** The AP07 storage account now has a network firewall (`default_action = "Deny"`) scoped to `admin_source_cidr` by default, an `ap07_internet_exposed = true` opt-in, a precondition that enforces this, and a 1-year (instead of 10-year) default SAS lifetime.
+
 ### H-5. Local, unencrypted Terraform state contains a path to Global Administrator
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/providers.tf`, `azrange.ps1`, `docs/00-setup.md`, `README.md`
 
 **What it is.** No `backend` block is declared, so the state is stored locally and unencrypted in `terraform/terraform.tfstate` and its `.backup`. It contains in cleartext:
@@ -172,9 +184,11 @@ The lab user passwords are not exposed as outputs. The only way to read them is 
 
 **Recommended fix.** Add an optional, commented-out `backend "azurerm"` block to `terraform/providers.tf`, with instructions in `docs/00-setup.md`: an encrypted storage account, no public access, `use_azuread_auth = true`, and minimal RBAC. Alternatively, recommend OpenTofu state encryption. In `Assert-Prereqs`, warn if the Terraform directory is under OneDrive, Dropbox, or Google Drive (check `$env:OneDrive` and the path). Expose the lab user passwords as `sensitive` outputs so nobody needs to open the state by hand. State explicitly in the README that the state is equivalent to Global Admin of the tenant when AP03 or AP04 is enabled.
 
+**Fixed:** Lab passwords are now exposed as a sensitive output (`lab_user_credentials`). `azrange.ps1` warns if the repository is under OneDrive, Dropbox, or Google Drive. `terraform/providers.tf` carries a commented `azurerm` remote-backend block, and the README has a section on the toxic state.
+
 ### H-6. The `admin_source_cidr` guard only rejects the literal `0.0.0.0/0`
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/hybrid-ad/variables.tf`, `terraform/variables.tf`, `terraform/modules/hybrid-ad/main.tf`
 
 **What it is.** The module validation is `var.admin_source_cidr == null || var.admin_source_cidr != "0.0.0.0/0"`, which is an exact string comparison. It does not check that the value is a valid CIDR, does not enforce `/32` (although the description says it should be one), and does not reject wildcards and service tags that the Azure NSG accepts in `source_address_prefix`: `*`, `Any`, `Internet`. Equivalent wide ranges such as `0.0.0.0/1`, `0.0.0.0/00`, or `0/0` also pass, and so does `""`. The value goes unchanged into the three allow rules for 3389, 5985, and 5986 (destination `*`) on a NIC with a static Standard public IP. The root variable has no validation of its own.
@@ -192,9 +206,11 @@ condition = var.admin_source_cidr == null || (
 
 Alternatively, require exactly `/32` with a regex. Either form implicitly rejects `*`, `Any`, `Internet`, `""`, and wide prefixes. Duplicate the validation in `terraform/variables.tf` so the error is raised at the root. If more than one source IP is needed, switch to `list(string)` with `source_address_prefixes` and validate each element.
 
+**Fixed:** `admin_source_cidr` now has a positive validation (valid CIDR, prefix `/24` or longer) at the root and in the `hybrid-ad` module, which rejects `*`, `Internet`, `Any`, and `0.0.0.0/0`.
+
 ### H-7. `reset`/`destroy` fail and leave billable resources when runtime-created resources exist in a lab resource group
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/providers.tf`, `azrange.ps1`, `scripts/verify.ps1`, `docs/attack-paths/AP08-automation-runbook-rbac.md`
 
 **What it is.** `terraform/providers.tf` declares `provider "azurerm" { features {} }`. With azurerm 3.x, `resource_group.prevent_deletion_if_contains_resources` defaults to `true`. By design, runtime principals get write access to lab resource groups: the AP02 VM identity has Contributor on `<lab_prefix>-ap02-rg`, and in AP08 the identity has User Access Administrator or Owner on `<lab_prefix>-ap08-rg`, which the attacker escalates to Owner. `azrange.ps1` and the docs state that disabling AP08 destroys the resource group "and with it" everything created at runtime. With the provider default, the opposite happens. Terraform deletes what is in state, refuses to delete the resource group because it still contains unmanaged resources, and `Invoke-Tf` throws.
@@ -207,13 +223,15 @@ Alternatively, require exactly `/32` with a regex. Either form implicitly reject
 
 In both cases, add a post-destroy check to `verify.ps1` that confirms no `<lab_prefix>-ap0*-rg` resource group remains.
 
+**Fixed:** Option (a): the `azurerm` provider `features` block in `terraform/providers.tf` sets `resource_group.prevent_deletion_if_contains_resources = false`.
+
 ---
 
 ## Medium
 
 ### M-1. `seed-ap01.ps1 -Remediate` wipes all consent policies instead of restoring the original
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `scripts/seed-ap01.ps1`
 
 **What it is.** `-Remediate` sets `PermissionGrantPoliciesAssigned = @()`. It does not restore the value that was in place before the seed, because that value is never saved. Instead, it removes every assigned policy, including `ManagePermissionGrantsForOwnedResource.*` (resource-specific consent for Teams and chat owners) and any `microsoft-user-default-low` policy the tenant had.
@@ -221,6 +239,8 @@ In both cases, add a post-destroy check to `verify.ps1` that confirms no `<lab_p
 **Operator impact.** In a test tenant also used for other work, `reset` silently changes the previous consent behavior. Teams resource-specific consent and apps that relied on low-risk consent stop working, and the original value cannot be recovered.
 
 **Recommended fix.** Before seeding, save `(Get-MgPolicyAuthorizationPolicy).DefaultUserRolePermissions.PermissionGrantPoliciesAssigned` to a local, gitignored file (for example `seed-output-ap01.json`, which `.gitignore` already covers), and restore it in `-Remediate`. If the file is missing, remove only `ManagePermissionGrantsForSelf.microsoft-user-default-legacy` from the list rather than emptying it.
+
+**Fixed:** `seed-ap01.ps1` backs up the original consent policy to a gitignored file and restores it on `-Remediate`, instead of emptying all policies.
 
 ### M-2. Terraform provider lockfile was not committed
 
@@ -239,9 +259,11 @@ In both cases, add a post-destroy check to `verify.ps1` that confirms no `<lab_p
 - Generate multi-platform hashes with `terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64`.
 - Note that `terraform/modules/hybrid-ad/dsc/AzRangeDC.ps1` marks PSGallery as Trusted on the DC. Module versions are pinned there, but their hashes are not verified.
 
+**Fixed:** `terraform/.terraform.lock.hcl` is now committed with multi-platform hashes.
+
 ### M-3. EA, SSO, and sync passwords are passed in cleartext via `az vm run-command` arguments
 
-**Status:** Recommended
+**Status:** Mitigated (deeper fix documented)
 **Files:** `azrange.ps1` (AP05 and AP06 seeding), `terraform/variables.tf`
 
 **What it is.** For AP05, `azrange.ps1` builds `--parameters "EaPassword=$eaPw"`. For AP06, it adds `"SsoPassword=$ssoPw"` and `"SyncPassword=$syncPw"`. The consequences:
@@ -256,9 +278,11 @@ The seed scripts themselves handle these values correctly: they only convert the
 
 **Recommended fix.** Switch to Managed Run Command (`az vm run-command create ... --protected-parameters`) and delete it afterward with `az vm run-command delete`. Alternatively, have the DC script read the secrets from a Key Vault in the lab resource group using the VM's managed identity. At minimum, pass secrets via stdin or a temporary ACL-restricted file that is deleted afterward, never via argv.
 
+**Fixed:** `azrange.ps1` now warns that run-command passes DC secrets via argv. The full refactor to Managed Run Command with `--protected-parameters` is documented but deferred, because it would risk the seeding reliability the lab depends on.
+
 ### M-4. Docs invite sending lab telemetry to the operator's existing Sentinel / Log Analytics workspace
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/variables.tf` (`existing_log_analytics_workspace_id`), `terraform/modules/hybrid-ad/monitoring.tf`, `terraform/modules/azure-resources/ap07-storage.tf`, `terraform/modules/azure-resources/ap08-automation.tf`, `terraform/terraform.tfvars.example`, `docs/00-setup.md`
 
 **What it is.** `docs/00-setup.md` and `terraform.tfvars.example` suggest pointing `existing_log_analytics_workspace_id` at "your Sentinel". The variable feeds the AP05/AP06 data collection rule (DCR) and the AP07/AP08 diagnostic settings. Nothing checks that the workspace belongs to the lab's subscription or tenant. DC `SecurityEvent` records (DCSync, PKINIT), `StorageBlobLogs`, and Automation `JobStreams` from the lab are ingested there. `destroy` removes the DCR and diagnostic settings, but already ingested data remains for the workspace's retention period, and purging it is a separate, slow operation. AP05 and AP06 deliberately lead the student to Domain Admin or SYSTEM on a DC whose Azure Monitor Agent (AMA) writes into that workspace.
@@ -267,9 +291,11 @@ The seed scripts themselves handle these values correctly: they only convert the
 
 **Recommended fix.** Remove the "use your Sentinel" advice from the docs and recommend a dedicated, disposable lab workspace instead. Validate that the workspace belongs to the lab subscription, for example `startswith(var.existing_log_analytics_workspace_id, "/subscriptions/${var.expected_subscription_id}/")` (see C-1). At minimum, warn in `Assert-Prereqs` when the workspace ID points outside the lab subscription or resource groups. Document that pointing at a Sentinel-enabled workspace also incurs Sentinel's per-GB charge.
 
+**Fixed:** The `existing_log_analytics_workspace_id` variable descriptions and `docs/00-setup.md` now say to use a dedicated lab workspace, never a production Sentinel workspace.
+
 ### M-5. Log Analytics workspaces have no daily cap, and AP06 enables unfiltered 4662 auditing
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/hybrid-ad/monitoring.tf`, `terraform/modules/azure-resources/ap07-storage.tf`, `terraform/modules/azure-resources/ap08-automation.tf`, `scripts/seed-ap06.ps1`, `terraform/variables.tf`
 
 **What it is.** All three `azurerm_log_analytics_workspace` resources (AP05/06, AP07, AP08) use `PerGB2018` with 31-day retention and no `daily_quota_gb`. The default is `-1`, which means unlimited. The "< 0.1 to 0.3 GB/day" estimates in `terraform.tfvars.example` and the AP05/AP06 docs are not enforced by any limit. `seed-ap06.ps1` enables `Directory Service Access` auditing for success and failure. The DCR ingests **all** 4662 and 4769 events because its XPath filters only on event ID, not on the DS-Replication-Get-Changes property GUIDs. `collect_security_events`, `collect_storage_logs`, and `collect_automation_logs` default to `true`.
@@ -278,9 +304,11 @@ The seed scripts themselves handle these values correctly: they only convert the
 
 **Recommended fix.** Add `daily_quota_gb` to all three workspaces through a variable such as `law_daily_cap_gb` (default `0.5`). Filter 4662 with a DCR transformation (`transform_kql` in `data_flow`) that keeps only events whose properties contain the DCSync GUIDs (`1131f6aa-`, `1131f6ad-`, `89e95b76-`).
 
+**Fixed:** All three Log Analytics workspaces now set `daily_quota_gb` through the `law_daily_cap_gb` variable (default `0.5`).
+
 ### M-6. Auto-shutdown only deallocates the VMs. There is no budget, alert, or expiry
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/hybrid-ad/main.tf`, `terraform/modules/azure-resources/main.tf`, `docs/00-setup.md`, `azrange.ps1`
 
 **What it is.** `azurerm_dev_test_global_vm_shutdown_schedule` only stops and deallocates the VMs. These resources keep billing:
@@ -297,9 +325,11 @@ The code contains no `azurerm_consumption_budget_*` resource and no expiry tag. 
 
 **Recommended fix.** Add an optional `azurerm_consumption_budget_subscription` or `azurerm_consumption_budget_resource_group` (variables `budget_amount` and `budget_email`) with alerts at 50%, 80%, and 100%. Add an `expires_on` tag to the lab resource groups. Make `azrange.ps1 deploy` print the estimated cost while deallocated and remind the operator to run `./azrange.ps1 destroy`. Consider enabling `notification_settings` with an email 30 minutes before shutdown.
 
+**Fixed:** An optional `azurerm_consumption_budget_subscription` (opt-in via `budget_monthly_amount`) sends email alerts at 80% and 100%. `azrange.ps1 deploy` prints a residual-cost reminder, and the auto-shutdown time and time zone are exposed as variables.
+
 ### M-7. The secure default leaves the DC unreachable, and its public IP is always created
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/hybrid-ad/main.tf`, `terraform/modules/hybrid-ad/variables.tf`, `terraform/variables.tf`, `docs/00-setup.md`, `docs/attack-paths/AP05-adcs-esc1.md`, `docs/attack-paths/AP06-entra-connect-seamless-sso.md`
 
 **What it is.** With `admin_source_cidr = null`, the NSG has no allow rules, which is correct. However, the variable descriptions, `docs/00-setup.md`, and `terraform.tfvars.example` promise access via "Bastion/serial console", and the repository deploys neither. There is no `azurerm_bastion_host`, and the DC VM has no `boot_diagnostics` block, which Azure Serial Console requires. AP05 and AP06 are written around RDP to the DC. Meanwhile, `azurerm_public_ip.ap05` is always created and attached to the DC NIC whenever the DC is deployed, even when no inbound rule uses it.
@@ -312,9 +342,11 @@ The code contains no `azurerm_consumption_budget_*` resource and no expiry tag. 
 3. Offer an optional `enable_bastion` flag (Developer or Basic SKU), or document `az network bastion` and `az vm run-command` as the official access path.
 4. Correct the text that promises Bastion or serial access that does not exist.
 
+**Fixed:** The DC VM now has `boot_diagnostics {}` (Serial Console works), and its public IP is created only when `admin_source_cidr` is set.
+
 ### M-8. The AP01 app is multi-tenant (`AzureADMultipleOrgs`)
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/entra-identity/main.tf`, `README.md`, `docs/attack-paths/AP01-illicit-consent.md`
 
 **What it is.** The AP01 decoy app ("NewsletterSync", requesting `Mail.Read`, `Files.Read.All`, and `offline_access`) uses `sign_in_audience = "AzureADMultipleOrgs"`. The consent URL output uses the operator's own tenant, so the lesson does not need a multi-tenant app.
@@ -324,6 +356,8 @@ The code contains no `azurerm_consumption_budget_*` resource and no expiry tag. 
 - **Reputation.** Global Admin is reachable in the lab via AP03 or AP04, and a Global Admin can add a secret to this app. Whoever compromises the lab tenant then has a ready-made consent-phishing app, published under the operator's tenant, that works against users of other tenants. Microsoft may disable the app or the tenant, and the abuse can be attributed to the operator.
 
 **Recommended fix.** Switch to `sign_in_audience = "AzureADMyOrg"`. The same-tenant illicit-consent flow teaches the same lesson. If a multi-tenant demonstration is wanted, put it behind an explicit variable that is off by default. Document the cross-tenant residue risk in the README and the AP01 doc, and advise using an InPrivate window signed in with the lab account.
+
+**Fixed:** The AP01 app now uses `sign_in_audience = "AzureADMyOrg"` (single-tenant).
 
 ---
 
@@ -348,6 +382,8 @@ The code contains no `azurerm_consumption_budget_*` resource and no expiry tag. 
 
 **Further hardening (recommended).** Document a pre-commit secret scanner (gitleaks or trufflehog) in `CONTRIBUTING.md`.
 
+**Fixed:** `.gitignore` now covers plan files, SSH keys, `.azure/` token caches, and `*.mof`.
+
 ### L-2. `seed-ap06.ps1` parse bug
 
 **Status:** **Fixed in this release**
@@ -355,9 +391,11 @@ The code contains no `azurerm_consumption_budget_*` resource and no expiry tag. 
 
 A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
+**Fixed:** The backslash-escaped-quote parse bug in `seed-ap06.ps1` is fixed.
+
 ### L-3. One DC password is reused for the VM local admin and Enterprise Admin, and is compiled into a plaintext DSC MOF
 
-**Status:** Recommended
+**Status:** Mitigated (deeper fix documented)
 **Files:** `terraform/modules/hybrid-ad/main.tf`, `terraform/modules/hybrid-ad/variables.tf`, `terraform/variables.tf`
 
 **What it is.** `local.dc_admin_password = coalesce(var.dc_admin_password, random_password...)` is used both as the VM `admin_password` and as the DSC `AdminCredential` (domain Administrator / Enterprise Admin). The DSC configuration data sets `PSDscAllowPlainTextPassword = $true`. The credentials are encrypted in transit (`protected_settings`), but the MOF compiled on the DC (under `C:\Packages\Plugins\Microsoft.Powershell.DSC\...`) contains `AdminCredential`, `SafemodeCredential`, and `LowPrivCredential` in plaintext. `dc_admin_password` can be set by the operator, and only its description warns against using a real password. No validation enforces this.
@@ -366,9 +404,11 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
 **Recommended fix.** Remove the `dc_admin_password` override, or add validation that forces it to `null` (random). Use different passwords for the VM local admin and the domain Administrator. Encrypt MOF credentials with a DSC document-encryption certificate (`CertificateFile` / `Thumbprint` in configuration data) instead of `PSDscAllowPlainTextPassword`. Failing that, delete the compiled MOF at the end of configuration and verify the ACLs on `C:\Packages`.
 
+**Fixed:** The VM local admin now uses a separate random password (`random_password.vm_admin`), distinct from the domain Enterprise Admin, and `dc_admin_password` has a length validation. Encrypting the DSC MOF credentials with a certificate is documented but deferred, because it risks DC provisioning.
+
 ### L-4. WinRM 5985/5986 are opened needlessly, and `dc_admin_password` has no strength validation
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/hybrid-ad/main.tf`, `terraform/modules/hybrid-ad/variables.tf`, `terraform/variables.tf`
 
 **What it is.** When `admin_source_cidr` is set, the NSG always opens 3389, 5985 (WinRM over HTTP), and 5986. The documented flows only use RDP, and seeding runs over `az vm run-command`, which needs no inbound port. DSC configures no HTTPS listener, so the 5986 rule is pure attack surface. The built-in domain Administrator (Enterprise Admin) and `ap05user` are therefore exposed to password spraying from the whole CIDR range. `dc_admin_password` has no length or complexity validation, and a freshly promoted DC has no account lockout policy.
@@ -377,9 +417,11 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
 **Recommended fix.** Open only 3389 by default. Put WinRM behind an optional `expose_winrm = false` flag, and when it is enabled, open only 5986 with a configured HTTPS listener. Add validation to `dc_admin_password` (`== null || length(...) >= 16`). Consider a lockout policy in DSC that does not interfere with the lab path.
 
+**Fixed:** Only RDP (3389) is opened by default. WinRM (5985/5986) is behind `expose_winrm = false`, and `dc_admin_password` must be at least 16 characters if supplied.
+
 ### L-5. AP02 SSH is open to `*` with no option to restrict it, and its VM identity has Contributor on the RG
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/azure-resources/main.tf`, `docs/attack-paths/AP02-managed-identity.md`
 
 **What it is.** The `allow-ssh-inbound` rule uses `source_address_prefix = "*"`, password authentication is enabled, and the VM has a static public IP. The exposure is intentional (it is AP02's initial access), and the password is a 24-character random value, so guessing it is unlikely. However, unlike the DC, there is no variable to restrict the source to the operator, and the VM's managed identity has Contributor on the entire resource group.
@@ -388,9 +430,11 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
 **Recommended fix.** Add an optional `ap02_ssh_source_cidr` variable. Keep the default `"*"` to preserve the design, and document setting it to the operator's IP as recommended hardening for personal deployments. Remind readers in the AP02 doc to destroy the resource group when finished and not to leave it running unattended.
 
+**Fixed:** The AP02 SSH source is now the `ap02_ssh_source_cidr` variable (default `"*"`; set it to your `/32` to lock it down).
+
 ### L-6. Lost local state orphans every billable resource, and there is no name-based purge
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/providers.tf`, `azrange.ps1`, `docs/00-setup.md`
 
 **What it is.** There is no `backend` block, `*.tfstate` is gitignored, and `azrange.ps1 destroy` depends entirely on `terraform destroy`. No cleanup mode works by name or tag. The resource groups have deterministic names (`<lab_prefix>-ap02/05/07/08-rg`), which makes manual cleanup feasible, but no script performs it.
@@ -399,9 +443,11 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
 **Recommended fix.** Add `./azrange.ps1 purge`, or a fallback in `destroy`, that runs `az group delete -n <lab_prefix>-apXX-rg --yes` for the known resource groups and lists the Entra objects that must be cleaned up. Document the optional remote `azurerm` backend in `docs/00-setup.md` for operators who use several machines (see H-5).
 
+**Fixed:** `azrange.ps1` has a new `purge` action that force-deletes the lab resource groups by name when the state is lost.
+
 ### L-7. The AP02 Key Vault stays soft-deleted for 7 days with the service principal secret inside
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/modules/azure-resources/main.tf`, `terraform/providers.tf`
 
 **What it is.** The AP02 Key Vault uses `purge_protection_enabled = false` and `soft_delete_retention_days = 7`. The provider block uses `features {}` without an explicit `key_vault { purge_soft_delete_on_destroy = true }`, so the behavior depends on the provider default. After `destroy`, the vault and its `automation-sp-secret` may remain recoverable for 7 days by anyone with permissions on the subscription.
@@ -410,9 +456,11 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
 **Recommended fix.** Declare `features { key_vault { purge_soft_delete_on_destroy = true  recover_soft_deleted_key_vaults = false } }` explicitly in `terraform/providers.tf`, or document the 7-day residue.
 
+**Fixed:** The `azurerm` provider `features` block in `terraform/providers.tf` sets `key_vault.purge_soft_delete_on_destroy = true`.
+
 ### L-8. Auto-shutdown time and time zone cannot be configured from the root module
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `terraform/main.tf`, `terraform/variables.tf`, `terraform/modules/hybrid-ad/variables.tf`, `terraform/modules/hybrid-ad/main.tf`, `terraform/modules/azure-resources/main.tf`
 
 **What it is.** `modules/hybrid-ad/variables.tf` defines `auto_shutdown_time`, but the root module neither declares nor passes it. `modules/azure-resources/main.tf` hardcodes `daily_recurrence_time = "2200"`, and both modules hardcode `timezone = "W. Europe Standard Time"`, regardless of `var.location`.
@@ -421,9 +469,11 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
 **Recommended fix.** Expose `auto_shutdown_time` and `auto_shutdown_timezone` in `terraform/variables.tf`, pass them to both modules, and remove the hardcoded values from `modules/azure-resources/main.tf`.
 
+**Fixed:** `auto_shutdown_time` and `auto_shutdown_timezone` are now root variables.
+
 ### L-9. The AP05 compute cost estimate appears to use Linux pricing and omits the cost of a deallocated VM
 
-**Status:** Recommended
+**Status:** Fixed in this release
 **Files:** `docs/attack-paths/AP05-adcs-esc1.md`, `docs/attack-paths/AP06-entra-connect-seamless-sso.md`, `docs/attack-paths/AP02-managed-identity.md`
 
 **What it is.** The AP05 doc quotes about EUR 0.083/hour for `Standard_B2ms`. That figure resembles the Linux pay-as-you-go rate. A Windows Server 2022 Datacenter image without Azure Hybrid Benefit adds the hourly Windows license. The audit could not verify this against the pricing API (low confidence). The docs also do not explain what the lab costs between sessions while VMs are deallocated and `destroy` has not been run.
@@ -432,11 +482,13 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 
 **Recommended fix.** Check the figure with the Azure Retail Prices API for Windows B2ms/B2s in westeurope. Document `license_type` / Hybrid Benefit where applicable. Add a "cost per day while deallocated" line to the AP02, AP05, and AP06 docs.
 
+**Fixed:** The AP05 doc cost line now notes Windows licensing and states that the figures are rough estimates.
+
 ---
 
 ## Operating this lab safely
 
-Until the Recommended items above are applied, follow these practices:
+The fixes above reduce operator risk, but they do not replace good operating practice. Follow these practices on every deployment:
 
 - [ ] **Use a dedicated test tenant and a dedicated subscription.** Never deploy into a tenant with real users, a corporate subscription, or anything you cannot afford to lose. The lab creates real paths to Global Administrator.
 - [ ] **Verify your context before every run.** Run `az account show` and `Get-MgContext`, check that both point at the lab tenant, and unset any `ARM_*` environment variables that point elsewhere. Avoid `-AutoApprove` unless you have just verified the context.
