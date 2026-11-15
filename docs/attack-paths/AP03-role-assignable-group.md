@@ -1,12 +1,12 @@
 # AP03 — Low-privilege owner over a role-assignable group → self-add → Global Administrator
 
 - **Layer:** Entra ID (role-assignable groups · directory roles)
-- **Cost:** ~zero dollars (identity-only, no compute) — **but requires Entra ID P1**: *role-assignable* groups (`isAssignableToRole = true`) do not exist in Entra Free, so, unlike AP01, this AP needs a dev/E5 tenant with P1. Teardown with `azrange.ps1 reset` / `destroy`, session cost 0.
+- **Cost:** ~zero dollars (identity-only, no compute) — **but requires Entra ID P1**: *role-assignable* groups (`isAssignableToRole = true`) do not exist in Entra Free, so, unlike AP01, this AP needs a dev/E5 tenant with P1. Teardown with `aether.ps1 reset` / `destroy`, session cost 0.
 - **MITRE ATT&CK:** [T1098](https://attack.mitre.org/techniques/T1098/) (Account Manipulation) · [T1098.003](https://attack.mitre.org/techniques/T1098/003/) (Account Manipulation: Additional Cloud Roles) · [T1078.004](https://attack.mitre.org/techniques/T1078/004/) (Valid Accounts: Cloud Accounts)
 - **Maps to cert:** CARTP / CARTE (adjacent defensive side: SC-300, AZ-500)
 - **Precondition seeded by the range:**
-  - Security group `azrange-ap03-role-admins` (`azuread_group.ap03_role_admins`) with **`assignable_to_role = true`** (role-assignable, requires P1) and **empty static membership** (`members = []`).
-  - The **low-privilege** user `azrange-user1` (reuses `azuread_user.lab[0]`; UPN `azrange-user1@<tenant_domain>`) is the **sole owner** of the group (`owners = [azuread_user.lab[0].object_id]`) — the misconfigured link.
+  - Security group `aether-ap03-role-admins` (`azuread_group.ap03_role_admins`) with **`assignable_to_role = true`** (role-assignable, requires P1) and **empty static membership** (`members = []`).
+  - The **low-privilege** user `aether-user1` (reuses `azuread_user.lab[0]`; UPN `aether-user1@<tenant_domain>`) is the **sole owner** of the group (`owners = [azuread_user.lab[0].object_id]`) — the misconfigured link.
   - The group **carries the directory role `Privileged Role Administrator`** (template_id `e8611ab8-c189-46e8-94e1-60213ab1f814`), instantiated with `azuread_directory_role.ap03_pra` and assigned **to the group** with `azuread_directory_role_assignment.ap03_pra` → all of its members inherit PRA.
   - Everything wired by Terraform (`enable_ap03 = true`) inside the existing `entra-identity` module, **100% declarative — no post-deployment seed**. The exploitation step (the owner self-adds to the membership) **is not seeded**: it is default Entra behavior triggered by the student.
   - **Deploy-permission precondition (not a vulnerable-state seed):** the principal running `terraform apply` must hold **`Privileged Role Administrator` or `Global Administrator`** (and the `RoleManagement.ReadWrite.Directory` app-role) in order to create the role-assignable group and assign PRA to it.
@@ -31,11 +31,11 @@ The conceptual axis is that the flaw is **not** the self-add (legitimate owner b
 
 Training grade. Public reference tools: **az cli** (`az rest`), **Microsoft Graph PowerShell** (`Microsoft.Graph`), **ROADtools** (`roadrecon`), **AzureHound**/**BloodHound**.
 
-The entire flow runs **with the token of the low-privilege user `azrange-user1`** — there is no administrator role to start with.
+The entire flow runs **with the token of the low-privilege user `aether-user1`** — there is no administrator role to start with.
 
-1. **Reconnaissance with low-privilege credentials (T1098 — recon of the `AZOwns` edge).** Authenticate as `azrange-user1` and enumerate the objects it owns; filter down to *role-assignable* groups:
+1. **Reconnaissance with low-privilege credentials (T1098 — recon of the `AZOwns` edge).** Authenticate as `aether-user1` and enumerate the objects it owns; filter down to *role-assignable* groups:
    ```bash
-   az login --allow-no-subscriptions   # user azrange-user1@<tenant_domain>
+   az login --allow-no-subscriptions   # user aether-user1@<tenant_domain>
    # Objects I OWN -> filter to groups and see which ones are role-assignable.
    # NOTE on JMESPath: a field containing '@' or '.' is referenced with DOUBLE quotes ("@odata.type");
    # with SINGLE quotes it would be a LITERAL and the filter would ALWAYS come back empty (blank table).
@@ -45,9 +45,9 @@ The entire flow runs **with the token of the low-privilege user `azrange-user1`*
    # (isAssignableToRole is returned by default on group objects; server-side alternative with a type-cast:
    #  .../me/ownedObjects/microsoft.graph.group?\$select=id,displayName,isAssignableToRole )
    ```
-   With the graph: `azurehound -u azrange-user1@<tenant_domain> list groups --tenant <tenantId>` and follow the `AZOwns` edge → group with `isAssignableToRole=true` in BloodHound; or `roadrecon gather` + `roadrecon plugin` for the same goal offline.
+   With the graph: `azurehound -u aether-user1@<tenant_domain> list groups --tenant <tenantId>` and follow the `AZOwns` edge → group with `isAssignableToRole=true` in BloodHound; or `roadrecon gather` + `roadrecon plugin` for the same goal offline.
 
-2. **Confirm the target.** Verify that `azrange-ap03-role-admins` is role-assignable and which role it carries:
+2. **Confirm the target.** Verify that `aether-ap03-role-admins` is role-assignable and which role it carries:
    ```bash
    # Role-assignable?
    az rest --method GET \
@@ -111,7 +111,7 @@ The entire flow runs **with the token of the low-privilege user `azrange-user1`*
 
 6. **Persistence / stealth (pedagogical).** Keeping the group membership **retains access**: ownership + role-assignable is both an **access path and a persistence path**. Key teardown observation: **every object created after reaching GA** (apps, SPs, credentials, other role assignments) falls **outside the Terraform state** and must be cleaned up by hand — same *out-of-state scope* caveat as AP02.
 
-7. **Teardown.** `./azrange.ps1 reset` re-applies with `enable_ap03 = false` (`count = 0`) → destroys the group and the role assignment and **reverts the self-add**; `members = []` also reverts it on any intermediate re-apply. Objects created after escalating to GA are cleaned up by hand.
+7. **Teardown.** `./aether.ps1 reset` re-applies with `enable_ap03 = false` (`count = 0`) → destroys the group and the role assignment and **reverts the self-add**; `members = []` also reverts it on any intermediate re-apply. Objects created after escalating to GA are cleaned up by hand.
 
 ---
 
@@ -128,7 +128,7 @@ The entire flow runs **with the token of the low-privilege user `azrange-user1`*
    # Remove the low-privilege owner:
    Remove-MgGroupOwnerByRef -GroupId <groupId> -DirectoryObjectId <userObjectId>
    ```
-   In the lab: `./azrange.ps1 reset` (`enable_ap03 = false`).
+   In the lab: `./aether.ps1 reset` (`enable_ap03 = false`).
 
 2. **Prefer assigning roles to individual users via Microsoft Entra PIM** (eligible, JIT activation with approval and MFA) instead of permanent assignment to groups. If role group-assignment is used, **restrict group ownership exclusively to administrators**. Do not manage privileged groups through self-service flows.
 

@@ -1,4 +1,4 @@
-title: Over-Privileged Managed Identity Self-Grant and Key Vault Secret Theft (Azure Attack Range AP02)
+title: Over-Privileged Managed Identity Self-Grant and Key Vault Secret Theft (AETHER AP02)
 id: 2d9c4f71-8a63-4e2b-b1c7-0a2f6e4b1c73
 status: experimental
 description: >
@@ -15,7 +15,7 @@ references:
   - https://attack.mitre.org/techniques/T1078/004/
   - https://attack.mitre.org/techniques/T1098/
   - https://learn.microsoft.com/en-us/azure/key-vault/general/logging
-author: Azure Attack Range
+author: AETHER
 date: 2026-11-14
 logsource:
   product: azure

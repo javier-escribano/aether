@@ -9,7 +9,7 @@
 //        a long-lived account SAS (leak_mode=sas) or the account key
 //        (leak_mode=account_key) to the private container 'sensitive-data'.      [T1530 + T1552.001]
 //     3. Authenticated PIVOT: the credential reads 'sensitive-data/customers.csv'
-//        (AZRANGE{ap07_public_blob_to_sas_to_private_exfil}) and exfiltrates the jewel. [T1530]
+//        (AETHER{ap07_public_blob_to_sas_to_private_exfil}) and exfiltrates the jewel. [T1530]
 //
 //   Sources (REAL tables in Log Analytics / Sentinel):
 //     - StorageBlobLogs  (blob DATA plane; resource-specific table produced
@@ -60,7 +60,7 @@
 //   Managed COMPLEMENT: Microsoft Defender for Storage (native detection of
 //     unusual anonymous access and exfiltration). Use in parallel.
 //
-//   Author: Azure Attack Range   Date: 2026-11-15
+//   Author: AETHER   Date: 2026-11-15
 // =====================================================================
 
 let lookback          = 1d;

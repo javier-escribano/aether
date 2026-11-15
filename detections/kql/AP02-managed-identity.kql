@@ -16,10 +16,10 @@
 // Detection relies on DOWNSTREAM events: AzureActivity for the set-policy / role
 // assignment and the vault's AuditEvent (SecretGet). There is no "token theft log".
 //
-// Author: Azure Attack Range   Date: 2026-11-14
+// Author: AETHER   Date: 2026-11-14
 // =====================================================================
 
-let lab_prefix   = "azrange-ap02";                // adjust if lab_prefix changes
+let lab_prefix   = "aether-ap02";                // adjust if lab_prefix changes
 let secret_name  = "automation-sp-secret";        // loot secret (client secret of the SP)
 let lookback     = 1d;
 let corr_window  = 30m;

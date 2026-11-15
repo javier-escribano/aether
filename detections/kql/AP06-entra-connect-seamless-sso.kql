@@ -1,7 +1,7 @@
 // =====================================================================
 // AP06 — Entra Connect / Seamless SSO (AZUREADSSOACC$): on-prem -> cloud bridge
 //        Chain: the attacker starts from the credential of the Entra Connect
-//        SYNCHRONIZATION account (AZRANGE\Sync_AZRANGE) seeded with DCSync
+//        SYNCHRONIZATION account (AETHER\Sync_AETHER) seeded with DCSync
 //        rights  ->  performs DCSync (4662 + replication GUID) to extract the
 //        Kerberos keys of the machine account AZUREADSSOACC$  ->  FORGES a silver
 //        ticket for the SPN HTTP/autologon.microsoftazuread-sso.com impersonating ANY
@@ -62,11 +62,11 @@
 //             If a real tenant exists, supplement with a KQL over SigninLogs
 //             of Seamless SSO (autologon.microsoftazuread-sso.com) — see CLOUD LIMIT.
 //
-// Author: Azure Attack Range   Date: 2026-11-15
+// Author: AETHER   Date: 2026-11-15
 // =====================================================================
 
 let sso_account   = "AZUREADSSOACC";      // = var.sso_account_name  (output ap06_sso_account without the '$')
-let sync_account  = "Sync_AZRANGE";       // = var.sync_account_name (output ap06_sync_account)
+let sync_account  = "Sync_AETHER";       // = var.sync_account_name (output ap06_sync_account)
 let sso_spn       = "autologon.microsoftazuread-sso.com";  // SPN that Entra validates and that the detections catch
 // Directory replication property GUIDs (the DCSync signature):
 let repl_changes     = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";  // DS-Replication-Get-Changes

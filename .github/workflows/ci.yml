@@ -1,7 +1,7 @@
 name: ci
 
 # ------------------------------------------------------------------
-# Azure Attack Range - CI: validates the IaC and the orchestrator scripts.
+# AETHER - CI: validates the IaC and the orchestrator scripts.
 #
 # What it checks (and why):
 #   * terraform fmt -check -recursive  -> canonical style across the 3 layers/modules.
@@ -20,7 +20,7 @@ name: ci
 #   * No tfsec/checkov/trivy: this IaC is INTENTIONALLY vulnerable (that is the point
 #     of the range). A security scanner would flag all of it and keep CI permanently
 #     red. Security analysis lives in the detections (KQL/Sigma), not here.
-#   * It does not validate terraform/modules/hybrid-ad/dsc/AzRangeDC.ps1: it is a DSC
+#   * It does not validate terraform/modules/hybrid-ad/dsc/AetherDC.ps1: it is a DSC
 #     `configuration` (Import-DscResource ActiveDirectoryDsc/CSDsc); the `configuration`
 #     keyword and those modules exist only in Windows PowerShell 5.1. The DSC engine
 #     validates it on the VM at deploy time, not this lint on Linux/pwsh.

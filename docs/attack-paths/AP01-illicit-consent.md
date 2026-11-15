@@ -5,7 +5,7 @@
 - **MITRE ATT&CK:** [T1528](https://attack.mitre.org/techniques/T1528/) (Steal Application Access Token) · [T1098.003](https://attack.mitre.org/techniques/T1098/003/) (Additional Cloud Roles / app abuse)
 - **Maps to cert:** CARTP / CARTE
 - **Precondition seeded by the range:**
-  - Multi-tenant app `azrange-ap01-NewsletterSync` requesting dangerous delegated scopes (`Mail.Read`, `Files.Read.All`, `offline_access`).
+  - Multi-tenant app `aether-ap01-NewsletterSync` requesting dangerous delegated scopes (`Mail.Read`, `Files.Read.All`, `offline_access`).
   - **Permissive** user-consent policy (any user can consent to any app) — applied by `scripts/seed-ap01.ps1`.
 
 ---
@@ -22,15 +22,15 @@ Classic *consent phishing* flow (training level; public reference tooling: **Gra
 
 1. **Deploy the range with AP01 enabled** and retrieve the consent URL:
    ```powershell
-   ./azrange.ps1 deploy
+   ./aether.ps1 deploy
    cd terraform; terraform output -raw ap01_consent_url
    ```
    The URL points to the tenant's legitimate `login.microsoftonline.com` endpoint — which is exactly what makes it credible.
 
-2. **The victim consents.** In the range you play the victim by opening that URL as an `azrange-userN`.
+2. **The victim consents.** In the range you play the victim by opening that URL as an `aether-userN`.
    Because the policy is permissive, Entra **does not require admin approval** and records the grant.
    > Shortcut for a demo without re-doing the consent by hand:
-   > `./scripts/seed-ap01.ps1 -AppId <appId> -PreConsent -VictimUpn azrange-user1@<tenant>`
+   > `./scripts/seed-ap01.ps1 -AppId <appId> -PreConsent -VictimUpn aether-user1@<tenant>`
 
 3. **code→token exchange.** The attacker swaps the redirect's `code` for an *access token* + *refresh token* against `/oauth2/v2.0/token`. The refresh token is the prize: it renews access persistently.
 
@@ -45,7 +45,7 @@ Classic *consent phishing* flow (training level; public reference tooling: **Gra
 
 ## 🟢 Remediate (remediation)
 
-The fix is a policy change, not an app change. The range applies it with `./azrange.ps1 reset` (or the script in `-Remediate` mode):
+The fix is a policy change, not an app change. The range applies it with `./aether.ps1 reset` (or the script in `-Remediate` mode):
 
 ```powershell
 # Disable user consent: only an admin can consent to apps.

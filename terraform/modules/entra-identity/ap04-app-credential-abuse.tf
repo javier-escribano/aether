@@ -5,7 +5,7 @@
 #
 # 100% DECLARATIVE core (no seed, needs_seed=none). The vulnerable
 # combination is three facts that Terraform sets:
-#   (a) azuread_user.lab[0] (azrange-user1), a LOW-privilege user, is
+#   (a) azuread_user.lab[0] (aether-user1), a LOW-privilege user, is
 #       the ONLY owner of the app registration (owners = [...]) -> by
 #       default in Entra, an app owner can ADD credentials (client
 #       secret / certificate) to that app,
@@ -52,7 +52,7 @@
 #     directory propagation -> retry the app-only token issuance (noted
 #     in the 'Exploit' doc).
 #
-# TEARDOWN: `./azrange.ps1 reset` re-applies with enable_ap04=false
+# TEARDOWN: `./aether.ps1 reset` re-applies with enable_ap04=false
 # (count = 0) -> destroys app + SP + app_role_assignment. The client
 # secret/cert that the student adds out-of-band and the objects created
 # after escalating to GA stay OUTSIDE the Terraform state and are cleaned
@@ -92,7 +92,7 @@ resource "azuread_application" "ap04_app" {
   sign_in_audience = "AzureADMyOrg"
 
   # MISCONFIG (the misconfigured link): the low-privilege user
-  # azrange-user1 is the ONLY owner. By default, an app owner can ADD
+  # aether-user1 is the ONLY owner. By default, an app owner can ADD
   # credentials (secret/cert) to THAT app -> exploitable primitive.
   owners = [azuread_user.lab[0].object_id]
 
@@ -111,7 +111,7 @@ resource "azuread_application" "ap04_app" {
 
 # Service principal of the vulnerable app: it is the principal that carries
 # the app role and the one the attacker authenticates as (client_credentials).
-# inline owner = azrange-user1 (persistence angle; azuread does NOT expose
+# inline owner = aether-user1 (persistence angle; azuread does NOT expose
 # an azuread_service_principal_owner resource, owners go in `owners`).
 resource "azuread_service_principal" "ap04_app" {
   count     = var.enable_ap04 ? 1 : 0
@@ -141,7 +141,7 @@ resource "azuread_app_role_assignment" "ap04_rmrwd" {
 # resource "azuread_application_password" "ap04_backdoor" {
 #   count             = var.enable_ap04 ? 1 : 0
 #   application_id    = azuread_application.ap04_app[0].id
-#   display_name      = "azrange-ap04-owner-backdoor"
+#   display_name      = "aether-ap04-owner-backdoor"
 #   end_date_relative = "17520h" # ~2 years (attacker TTL). Do NOT use
 #   # timeadd(timestamp(), ...): timestamp() is re-evaluated on EVERY plan
 #   # -> perpetual diff / credential recreation. end_date_relative is

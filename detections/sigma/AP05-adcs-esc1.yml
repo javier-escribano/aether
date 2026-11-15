@@ -2,9 +2,9 @@ title: AP05 - AD CS ESC1 (Enrollee-Supplies-Subject) - honeytemplate enrollment,
 id: 7d9b2c4a-5e61-4f8a-b3c2-1a2b3c4d5e6f
 status: experimental
 description: |
-  Detects the AP05 chain of Azure Attack Range (AD CS ESC1 on a hybrid on-prem DC in
-  Azure IaaS). A low-privilege user (AZRANGE\ap05user) enrolls the deliberately
-  vulnerable template 'AzRangeAuthESC1' (ENROLLEE_SUPPLIES_SUBJECT + Client
+  Detects the AP05 chain of AETHER (AD CS ESC1 on a hybrid on-prem DC in
+  Azure IaaS). A low-privilege user (AETHER\ap05user) enrolls the deliberately
+  vulnerable template 'AetherAuthESC1' (ENROLLEE_SUPPLIES_SUBJECT + Client
   Authentication + Enroll for Domain Users + no manager approval), specifies
   SAN = UPN of a Domain Admin, and authenticates the forged certificate via PKINIT to
   obtain a TGT as that DA (-> DCSync). Source: Windows Security events from the
@@ -26,7 +26,7 @@ references:
   - https://www.blackhillsinfosec.com/detecting-adcs-privilege-escalation/
   - https://posts.specterops.io/certified-pre-owned-d95910965cd2
   - https://learn.microsoft.com/en-us/defender-for-identity/
-author: Azure Attack Range
+author: AETHER
 date: 2026-11-14
 logsource:
   product: windows
@@ -41,14 +41,14 @@ detection:
     EventID:
       - 4886
       - 4887
-    CertificateTemplate|contains: 'AzRangeAuthESC1'
+    CertificateTemplate|contains: 'AetherAuthESC1'
   sel_request_issue_attrs:
     EventID:
       - 4886
       - 4887
-    Attributes|contains: 'AzRangeAuthESC1'
+    Attributes|contains: 'AetherAuthESC1'
   # signal -> seeding / tampering: AD CS template updated (4899) or its security (4900).
-  # Seeding 'AzRangeAuthESC1' (seed-ap05) and remediation (-Remediate) fire here.
+  # Seeding 'AetherAuthESC1' (seed-ap05) and remediation (-Remediate) fire here.
   sel_template_change:
     EventID:
       - 4899
@@ -73,7 +73,7 @@ fields:
   - PreAuthType
   - CertThumbprint
 falsepositives:
-  - Legitimate enrollment in custom or smartcard authentication templates if the name is reused; scope sel_request_issue/_attrs to the EXACT name of the lab honeytemplate (AzRangeAuthESC1).
+  - Legitimate enrollment in custom or smartcard authentication templates if the name is reused; scope sel_request_issue/_attrs to the EXACT name of the lab honeytemplate (AetherAuthESC1).
   - Legitimate smartcard / PKINIT logons (sel_pkinit_tgt); maintain an allowlist of accounts and hosts with expected PKINIT.
   - Legitimate template management by PKI administrators (sel_template_change); allowlist the PKI admins and approved change windows.
 level: high
@@ -86,7 +86,7 @@ tags:
   - attack.t1003.006
 # ---------------------------------------------------------------------
 # Signal -> AP05 attack stage mapping (see companion AP05-adcs-esc1.kql):
-#   sel_request_issue / sel_request_issue_attrs -> 4886/4887 on 'AzRangeAuthESC1':
+#   sel_request_issue / sel_request_issue_attrs -> 4886/4887 on 'AetherAuthESC1':
 #        enrolling the honeytemplate is NEVER normal -> every hit is suspicious     [T1649]
 #   sel_template_change -> 4899/4900: seeding the vuln (seed-ap05) or its
 #        remediation/tampering; the defender SEES the vuln planted/removed          [T1649]

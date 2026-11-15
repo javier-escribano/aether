@@ -74,7 +74,7 @@ locals {
   # PowerShell $var and $(...) are literals to HCL -they are not ${...}-).
   ap08_poc_content = <<-POC
     <#
-      Azure Attack Range - AP08 runbook_mode="poc_escalation". Runs AS the system-
+      AETHER - AP08 runbook_mode="poc_escalation". Runs AS the system-
       assigned MI of the Automation Account. The MI holds ${local.ap08_mi_role_name}
       on the RG -> self-grants Owner of the RG to the attacker. SCOPE = the RG ON
       PURPOSE (reset-safe: the assignment dies with the RG; a subscription -Scope
@@ -96,7 +96,7 @@ locals {
 
   ap08_probe_content = <<-PROBE
     <#
-      Azure Attack Range - AP08 runbook_mode="benign_probe". Probes the IDENTITY and POWER
+      AETHER - AP08 runbook_mode="benign_probe". Probes the IDENTITY and POWER
       of the MI WITHOUT escalating (careful-operator recon): confirms that the job
       runs AS the MI and that the MI holds ${local.ap08_mi_role_name} on the RG.
       The student WRITES the New-AzRoleAssignment.
@@ -183,7 +183,7 @@ resource "random_password" "ap08_attacker" {
 resource "azuread_user" "ap08_attacker" {
   count                 = var.enable_ap08 ? 1 : 0
   user_principal_name   = local.ap08_attacker_upn
-  display_name          = "AzRange AP08 Attacker (low-priv Automation Contributor)"
+  display_name          = "Aether AP08 Attacker (low-priv Automation Contributor)"
   mail_nickname         = "${var.lab_prefix}-ap08-attacker"
   password              = random_password.ap08_attacker[0].result
   force_password_change = false

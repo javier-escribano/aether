@@ -16,7 +16,7 @@ locals {
     "Files.Read.All" = "df85f4d6-205c-4ac5-a5ea-6bf408dba283"
   }
 
-  ap01_redirect = "https://localhost/azrange-ap01"
+  ap01_redirect = "https://localhost/aether-ap01"
 }
 
 # ---- Base synthetic users ----------------------------------------
@@ -30,7 +30,7 @@ resource "azuread_user" "lab" {
   count = var.user_count
 
   user_principal_name   = "${var.lab_prefix}-user${count.index + 1}@${var.tenant_domain}"
-  display_name          = "Azure Attack Range Lab User ${count.index + 1}"
+  display_name          = "AETHER Lab User ${count.index + 1}"
   mail_nickname         = "${var.lab_prefix}-user${count.index + 1}"
   password              = random_password.user[count.index].result
   force_password_change = false

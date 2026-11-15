@@ -5,7 +5,7 @@
 variable "lab_prefix" {
   description = "Prefix for naming the range objects (simplifies teardown)."
   type        = string
-  default     = "azrange"
+  default     = "aether"
 }
 
 variable "location" {
@@ -27,7 +27,7 @@ variable "auto_shutdown_timezone" {
 }
 
 variable "tenant_domain" {
-  description = "AP08 - TEST tenant domain (e.g. azrangelab.onmicrosoft.com) for the UPN of the attacker azuread_user. Wired by the root; null when AP08 is unused (the module does not create the user with enable_ap08=false)."
+  description = "AP08 - TEST tenant domain (e.g. aetherlab.onmicrosoft.com) for the UPN of the attacker azuread_user. Wired by the root; null when AP08 is unused (the module does not create the user with enable_ap08=false)."
   type        = string
   default     = null
 }

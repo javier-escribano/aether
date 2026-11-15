@@ -2,9 +2,9 @@ title: AP06 - Entra Connect / Seamless SSO (AZUREADSSOACC$) - DCSync of the sync
 id: b6e1d4c7-3a92-4f85-9c2e-1f7a6b3d8e40
 status: experimental
 description: |
-  Detects the AP06 chain of Azure Attack Range on the hybrid DC shared with AP05
+  Detects the AP06 chain of AETHER on the hybrid DC shared with AP05
   (on-prem in Azure IaaS). The Entra Connect synchronization account
-  (AZRANGE\Sync_AZRANGE, seeded with DCSync rights) performs DCSync (4662 +
+  (AETHER\Sync_AETHER, seeded with DCSync rights) performs DCSync (4662 +
   replication GUID) to extract the Kerberos keys of the machine account
   AZUREADSSOACC$; with them it FORGES a SILVER TICKET for the SPN
   HTTP/autologon.microsoftazuread-sso.com impersonating any synchronized user,
@@ -30,7 +30,7 @@ references:
   - https://attack.mitre.org/techniques/T1558/001/
   - https://attack.mitre.org/techniques/T1550/
   - https://learn.microsoft.com/en-us/defender-for-identity/
-author: Azure Attack Range
+author: AETHER
 date: 2026-11-15
 logsource:
   product: windows

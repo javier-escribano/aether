@@ -10,7 +10,7 @@
       Safe        -> user consent is disabled (requires admin).
 
     Default mode  : leaves the tenant in the vulnerable state.
-    -Remediate    : restores the safe state (used by `azrange.ps1 reset`).
+    -Remediate    : restores the safe state (used by `aether.ps1 reset`).
     -PreConsent   : additionally pre-creates the delegated grant for a victim user,
                     to demonstrate token abuse without repeating the consent phishing.
 

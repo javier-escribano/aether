@@ -1,6 +1,6 @@
 # Security Review: Operator Risk
 
-This document is a prioritized security review of **Azure Attack Range** from the point of view of the **person who deploys and operates it** in their own Microsoft Entra tenant and Azure subscription.
+This document is a prioritized security review of **AETHER** (Azure Entra Tenant Hacking & Exploitation Range) from the point of view of the **person who deploys and operates it** in their own Microsoft Entra tenant and Azure subscription.
 
 ## Scope
 
@@ -68,11 +68,11 @@ As of this release, every finding below is either **Fixed** or **Mitigated**. No
 ### C-1. Nothing hard-blocks deployment into the wrong tenant or subscription
 
 **Status:** Fixed in this release
-**Files:** `azrange.ps1` (`Assert-Prereqs`), `terraform/providers.tf`, `terraform/variables.tf`
+**Files:** `aether.ps1` (`Assert-Prereqs`), `terraform/providers.tf`, `terraform/variables.tf`
 
-**What it is.** `Assert-Prereqs` in `azrange.ps1` only prints the active tenant and subscription with `Write-Warn` and then continues. It does not prompt, uses no allowlist, and does not compare anything against `var.tenant_domain`. If `az account show` fails or returns nothing (stderr is discarded), the warning silently disappears. In `terraform/providers.tf`, `provider "azuread" {}` and `provider "azurerm" { features {} }` declare no `tenant_id` or `subscription_id`. Terraform therefore uses whatever ambient context exists: the `az` session or `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` / `ARM_CLIENT_ID`, which may differ from what the warning showed. `tenant_domain` has no `validation` block and is used only to build UPNs. `-AutoApprove` also skips Terraform's own confirmation, so `deploy`, `reset`, and `destroy` can run with no human gate at all. A mismatched `tenant_domain` does not protect the operator either. Resources that do not depend on the lab users (the AP01 application, everything in AP02/AP07/AP08) are created in parallel before `azuread_user.lab` fails, which leaves a partial deployment in the wrong tenant.
+**What it is.** `Assert-Prereqs` in `aether.ps1` only prints the active tenant and subscription with `Write-Warn` and then continues. It does not prompt, uses no allowlist, and does not compare anything against `var.tenant_domain`. If `az account show` fails or returns nothing (stderr is discarded), the warning silently disappears. In `terraform/providers.tf`, `provider "azuread" {}` and `provider "azurerm" { features {} }` declare no `tenant_id` or `subscription_id`. Terraform therefore uses whatever ambient context exists: the `az` session or `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` / `ARM_CLIENT_ID`, which may differ from what the warning showed. `tenant_domain` has no `validation` block and is used only to build UPNs. `-AutoApprove` also skips Terraform's own confirmation, so `deploy`, `reset`, and `destroy` can run with no human gate at all. A mismatched `tenant_domain` does not protect the operator either. Resources that do not depend on the lab users (the AP01 application, everything in AP02/AP07/AP08) are created in parallel before `azuread_user.lab` fails, which leaves a partial deployment in the wrong tenant.
 
-**Operator impact.** Operators who work in Azure daily often have `az` or `ARM_*` pointing at their corporate tenant. In that case, `./azrange.ps1 deploy -AutoApprove` creates the following in production:
+**Operator impact.** Operators who work in Azure daily often have `az` or `ARM_*` pointing at their corporate tenant. In that case, `./aether.ps1 deploy -AutoApprove` creates the following in production:
 
 - apps with `Mail.Read` / `Files.Read.All` scopes
 - a service principal with admin-consented `RoleManagement.ReadWrite.Directory` (AP04)
@@ -85,11 +85,11 @@ Together these create privilege-escalation paths to Global Administrator in the 
 **Recommended fix.**
 1. Add required variables `expected_tenant_id` and `expected_subscription_id`, and pin them in both providers (`provider "azuread" { tenant_id = var.expected_tenant_id }`, and `tenant_id` / `subscription_id` on `azurerm`). Terraform then fails if the context does not match.
 2. In `Assert-Prereqs`, `throw` if `az account show` fails or if its `tenantId` / `id` differ from the tfvars values. Fetch the initial domain via `az rest --url https://graph.microsoft.com/v1.0/organization` and abort if it does not match `tenant_domain`. Optionally refuse to continue if the tenant has verified domains other than `*.onmicrosoft.com`.
-3. Require the operator to type the tenant name (`Read-Host`) even with `-AutoApprove`, unless an explicit environment variable such as `AZRANGE_I_UNDERSTAND=<tenantId>` is set.
+3. Require the operator to type the tenant name (`Read-Host`) even with `-AutoApprove`, unless an explicit environment variable such as `AETHER_I_UNDERSTAND=<tenantId>` is set.
 4. Add `validation { condition = endswith(var.tenant_domain, ".onmicrosoft.com") }` to `tenant_domain`.
 5. If `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` are set, verify they match the displayed context.
 
-**Fixed:** providers.tf pins `expected_tenant_id` / `expected_subscription_id`. `Assert-Prereqs` in `azrange.ps1` hard-fails on an active-tenant mismatch and requires typed confirmation (the `AZRANGE_I_UNDERSTAND` environment variable overrides it for automation). `tenant_domain` is now validated to end in `.onmicrosoft.com`.
+**Fixed:** providers.tf pins `expected_tenant_id` / `expected_subscription_id`. `Assert-Prereqs` in `aether.ps1` hard-fails on an active-tenant mismatch and requires typed confirmation (the `AETHER_I_UNDERSTAND` environment variable overrides it for automation). `tenant_domain` is now validated to end in `.onmicrosoft.com`.
 
 ---
 
@@ -104,33 +104,33 @@ Together these create privilege-escalation paths to Global Administrator in the 
 
 **Operator impact.** Even when `az` and Terraform correctly target the test tenant, the AP01 seed can enable permissive user consent in the operator's **production** tenant. With `-Remediate`, it can also empty that tenant's consent policies. This opens a real consent-phishing vector in the operator's organization with no warning.
 
-**Recommended fix.** Have `azrange.ps1` pass the already validated tenant ID (`seed-ap01.ps1 -TenantId $tid`). Have the seed use `Connect-MgGraph -TenantId $TenantId -ContextScope Process`, then abort unless `(Get-MgContext).TenantId -eq $TenantId`. Print the tenant before modifying the authorization policy. Apply the same pattern to `verify.ps1`.
+**Recommended fix.** Have `aether.ps1` pass the already validated tenant ID (`seed-ap01.ps1 -TenantId $tid`). Have the seed use `Connect-MgGraph -TenantId $TenantId -ContextScope Process`, then abort unless `(Get-MgContext).TenantId -eq $TenantId`. Print the tenant before modifying the authorization policy. Apply the same pattern to `verify.ps1`.
 
 **Fixed:** `seed-ap01.ps1` and `verify.ps1` now call `Connect-MgGraph -TenantId` and verify the context tenant before touching the authorization policy.
 
 ### H-2. `destroy` never reverts the tenant-wide user-consent policy set by AP01
 
 **Status:** Fixed in this release
-**Files:** `azrange.ps1` (`destroy` and `reset` branches), `scripts/seed-ap01.ps1`, `README.md`, `CONTRIBUTING.md`
+**Files:** `aether.ps1` (`destroy` and `reset` branches), `scripts/seed-ap01.ps1`, `README.md`, `CONTRIBUTING.md`
 
-**What it is.** `seed-ap01.ps1` changes the authorization policy of the **entire tenant** (`PermissionGrantPoliciesAssigned = @('ManagePermissionGrantsForSelf.microsoft-user-default-legacy')`). This change is not tracked in Terraform state. Only the `reset` branch of `azrange.ps1` calls `seed-ap01.ps1 -Remediate`. The `destroy` branch only runs `terraform destroy` and does not warn about the leftover change. `reset` itself depends on the `ap01_app_id` Terraform output, so after a `destroy` that output is null and `reset` does not remediate either. The README claims that `azrange.ps1 destroy` removes everything, and `CONTRIBUTING.md` states that nothing should survive `destroy`. Both claims are false for this change.
+**What it is.** `seed-ap01.ps1` changes the authorization policy of the **entire tenant** (`PermissionGrantPoliciesAssigned = @('ManagePermissionGrantsForSelf.microsoft-user-default-legacy')`). This change is not tracked in Terraform state. Only the `reset` branch of `aether.ps1` calls `seed-ap01.ps1 -Remediate`. The `destroy` branch only runs `terraform destroy` and does not warn about the leftover change. `reset` itself depends on the `ap01_app_id` Terraform output, so after a `destroy` that output is null and `reset` does not remediate either. The README claims that `aether.ps1 destroy` removes everything, and `CONTRIBUTING.md` states that nothing should survive `destroy`. Both claims are false for this change.
 
 **Operator impact.** After a `destroy` the operator believes is complete, any user in the tenant can still consent to any third-party multi-tenant app with delegated scopes (`Mail.Read`, `Files.Read.All`, `offline_access`). That is exactly the AP01 illicit-consent condition, and it stays active indefinitely without the operator knowing. The risk is real if the tenant is shared with other workloads or has real users, or if the seed ran against the wrong tenant (see H-1).
 
 **Recommended fix.** In the `destroy` branch, run `seed-ap01.ps1 -Remediate` **before** `terraform destroy`. Remediate whenever the legacy policy is present, without depending on the `ap01_app_id` output (for example, make `-AppId` optional in `-Remediate` mode). Combine this with the restore logic in M-1. Have `verify.ps1` report this "out-of-state residue" after `destroy` as well. Correct the README claim.
 
-**Fixed:** `azrange.ps1 destroy` runs `seed-ap01.ps1 -Remediate` before `terraform destroy`.
+**Fixed:** `aether.ps1 destroy` runs `seed-ap01.ps1 -Remediate` before `terraform destroy`.
 
 ### H-3. Directory roles and credentials created at runtime survive `reset` and `destroy`
 
 **Status:** Fixed in this release
-**Files:** `azrange.ps1`, `scripts/verify.ps1`, `terraform/modules/entra-identity/main.tf`, `terraform/modules/entra-identity/ap03-role-assignable-group.tf`, `terraform/modules/entra-identity/ap04-app-credential-abuse.tf`
+**Files:** `aether.ps1`, `scripts/verify.ps1`, `terraform/modules/entra-identity/main.tf`, `terraform/modules/entra-identity/ap03-role-assignable-group.tf`, `terraform/modules/entra-identity/ap04-app-credential-abuse.tf`
 
-**What it is.** The `reset` branch only sets `enable_ap01..08 = false`. The base users (`azuread_user.lab`) are not behind a flag and survive. AP03 and AP04 end with the attacker (`azrange-user1`) assigning themselves Global Administrator outside Terraform. If the role is assigned directly to the user, rather than through the AP03 group or the AP04 service principal, the assignment survives the deletion of those objects. The same applies to any app, service principal, or secret the student creates as Global Admin. Those objects carry no `lab_prefix` and are not in state. A Global Admin can also call `elevateAccess`, which grants User Access Administrator at the root (`/`) of the management-group hierarchy and therefore control of **every** subscription in the tenant. The module headers acknowledge that such objects must be cleaned up by hand. However, neither `reset`, `destroy`, nor `verify.ps1` checks for leftover privileged assignments. The "RG-scoped" guarantee for AP08 in `docs/00-setup.md` no longer holds once Global Admin has been reached via AP03/AP04.
+**What it is.** The `reset` branch only sets `enable_ap01..08 = false`. The base users (`azuread_user.lab`) are not behind a flag and survive. AP03 and AP04 end with the attacker (`aether-user1`) assigning themselves Global Administrator outside Terraform. If the role is assigned directly to the user, rather than through the AP03 group or the AP04 service principal, the assignment survives the deletion of those objects. The same applies to any app, service principal, or secret the student creates as Global Admin. Those objects carry no `lab_prefix` and are not in state. A Global Admin can also call `elevateAccess`, which grants User Access Administrator at the root (`/`) of the management-group hierarchy and therefore control of **every** subscription in the tenant. The module headers acknowledge that such objects must be cleaned up by hand. However, neither `reset`, `destroy`, nor `verify.ps1` checks for leftover privileged assignments. The "RG-scoped" guarantee for AP08 in `docs/00-setup.md` no longer holds once Global Admin has been reached via AP03/AP04.
 
-**Operator impact.** After a `reset` that `azrange.ps1` reports as a "clean base", an active Global Administrator can remain. That account has `force_password_change = false` and a password stored in state, and may come with service principal backdoors created by the student. The holder of those credentials can keep Global Admin, or Owner at the root, and use it against the operator's paid subscription (crypto-mining, expensive resources) after a teardown the operator considers clean. If the test tenant is linked to billing, or has B2B or cross-tenant trust, this is a persistent full takeover.
+**Operator impact.** After a `reset` that `aether.ps1` reports as a "clean base", an active Global Administrator can remain. That account has `force_password_change = false` and a password stored in state, and may come with service principal backdoors created by the student. The holder of those credentials can keep Global Admin, or Owner at the root, and use it against the operator's paid subscription (crypto-mining, expensive resources) after a teardown the operator considers clean. If the test tenant is linked to billing, or has B2B or cross-tenant trust, this is a persistent full takeover.
 
-**Recommended fix.** Add an `audit-residue` step to `azrange.ps1` and call it at the end of `reset` and `destroy`. The step lists:
+**Recommended fix.** Add an `audit-residue` step to `aether.ps1` and call it at the end of `reset` and `destroy`. The step lists:
 
 - directory `roleAssignments` whose principal is a lab user or service principal (by `lab_prefix`), or was created after the deploy timestamp
 - `passwordCredentials` / `keyCredentials` on lab apps and on apps created after the deploy
@@ -139,7 +139,7 @@ Together these create privilege-escalation paths to Global Administrator in the 
 
 The step should remove these objects, or at least report them and exit non-zero. Add a "no lab users with Tier-0 roles outside state" check to `verify.ps1`. Optionally rotate the lab user passwords on `reset` (taint `random_password.user`). Document the mandatory manual cleanup procedure.
 
-**Fixed:** `Invoke-ResidueCheck` in `azrange.ps1` runs after `reset` and `destroy` and warns about lab principals that still hold directory roles.
+**Fixed:** `Invoke-ResidueCheck` in `aether.ps1` runs after `reset` and `destroy` and warns about lab principals that still hold directory roles.
 
 ### H-4. AP07 publishes a long-lived, writable account SAS to the entire Internet
 
@@ -171,20 +171,20 @@ It publishes this SAS in `backup-config.json` inside a container with `container
 ### H-5. Local, unencrypted Terraform state contains a path to Global Administrator
 
 **Status:** Fixed in this release
-**Files:** `terraform/providers.tf`, `azrange.ps1`, `docs/00-setup.md`, `README.md`
+**Files:** `terraform/providers.tf`, `aether.ps1`, `docs/00-setup.md`, `README.md`
 
 **What it is.** No `backend` block is declared, so the state is stored locally and unencrypted in `terraform/terraform.tfstate` and its `.backup`. It contains in cleartext:
 
-1. The passwords of the Entra lab users (`random_password.user`, with `force_password_change = false`). `azrange-user1` is the **sole owner** of the AP03 role-assignable group and of the AP04 app and service principal that holds `RoleManagement.ReadWrite.Directory`.
+1. The passwords of the Entra lab users (`random_password.user`, with `force_password_change = false`). `aether-user1` is the **sole owner** of the AP03 role-assignable group and of the AP04 app and service principal that holds `RoleManagement.ReadWrite.Directory`.
 2. The DC Enterprise Admin, DSRM, AP06 SSO, and sync passwords, the AP07 SAS or key, the AP02 service principal client secret, and the AP08 attacker password.
 
 The lab user passwords are not exposed as outputs. The only way to read them is `terraform state show` or opening the JSON, which encourages copying or pasting the state. `.gitignore` correctly excludes `*.tfstate`. However, it does not protect against folder sync (OneDrive or Dropbox on Windows), backups, or local malware. The docs say to treat the state as toxic but offer no encrypted remote backend.
 
-**Operator impact.** With AP03 or AP04 enabled, anyone who obtains the state (through a synced folder, a zip sent to a colleague, a backup, or a compromised laptop) can sign in as `azrange-user1` and escalate to Global Administrator of the **real** tenant where the lab was deployed. They also get Owner over the AP08 resource groups and control of the DC. This is the most valuable credential the operator handles, and it sits in plaintext inside the repository tree.
+**Operator impact.** With AP03 or AP04 enabled, anyone who obtains the state (through a synced folder, a zip sent to a colleague, a backup, or a compromised laptop) can sign in as `aether-user1` and escalate to Global Administrator of the **real** tenant where the lab was deployed. They also get Owner over the AP08 resource groups and control of the DC. This is the most valuable credential the operator handles, and it sits in plaintext inside the repository tree.
 
 **Recommended fix.** Add an optional, commented-out `backend "azurerm"` block to `terraform/providers.tf`, with instructions in `docs/00-setup.md`: an encrypted storage account, no public access, `use_azuread_auth = true`, and minimal RBAC. Alternatively, recommend OpenTofu state encryption. In `Assert-Prereqs`, warn if the Terraform directory is under OneDrive, Dropbox, or Google Drive (check `$env:OneDrive` and the path). Expose the lab user passwords as `sensitive` outputs so nobody needs to open the state by hand. State explicitly in the README that the state is equivalent to Global Admin of the tenant when AP03 or AP04 is enabled.
 
-**Fixed:** Lab passwords are now exposed as a sensitive output (`lab_user_credentials`). `azrange.ps1` warns if the repository is under OneDrive, Dropbox, or Google Drive. `terraform/providers.tf` carries a commented `azurerm` remote-backend block, and the README has a section on the toxic state.
+**Fixed:** Lab passwords are now exposed as a sensitive output (`lab_user_credentials`). `aether.ps1` warns if the repository is under OneDrive, Dropbox, or Google Drive. `terraform/providers.tf` carries a commented `azurerm` remote-backend block, and the README has a section on the toxic state.
 
 ### H-6. The `admin_source_cidr` guard only rejects the literal `0.0.0.0/0`
 
@@ -211,15 +211,15 @@ Alternatively, require exactly `/32` with a regex. Either form implicitly reject
 ### H-7. `reset`/`destroy` fail and leave billable resources when runtime-created resources exist in a lab resource group
 
 **Status:** Fixed in this release
-**Files:** `terraform/providers.tf`, `azrange.ps1`, `scripts/verify.ps1`, `docs/attack-paths/AP08-automation-runbook-rbac.md`
+**Files:** `terraform/providers.tf`, `aether.ps1`, `scripts/verify.ps1`, `docs/attack-paths/AP08-automation-runbook-rbac.md`
 
-**What it is.** `terraform/providers.tf` declares `provider "azurerm" { features {} }`. With azurerm 3.x, `resource_group.prevent_deletion_if_contains_resources` defaults to `true`. By design, runtime principals get write access to lab resource groups: the AP02 VM identity has Contributor on `<lab_prefix>-ap02-rg`, and in AP08 the identity has User Access Administrator or Owner on `<lab_prefix>-ap08-rg`, which the attacker escalates to Owner. `azrange.ps1` and the docs state that disabling AP08 destroys the resource group "and with it" everything created at runtime. With the provider default, the opposite happens. Terraform deletes what is in state, refuses to delete the resource group because it still contains unmanaged resources, and `Invoke-Tf` throws.
+**What it is.** `terraform/providers.tf` declares `provider "azurerm" { features {} }`. With azurerm 3.x, `resource_group.prevent_deletion_if_contains_resources` defaults to `true`. By design, runtime principals get write access to lab resource groups: the AP02 VM identity has Contributor on `<lab_prefix>-ap02-rg`, and in AP08 the identity has User Access Administrator or Owner on `<lab_prefix>-ap08-rg`, which the attacker escalates to Owner. `aether.ps1` and the docs state that disabling AP08 destroys the resource group "and with it" everything created at runtime. With the provider default, the opposite happens. Terraform deletes what is in state, refuses to delete the resource group because it still contains unmanaged resources, and `Invoke-Tf` throws.
 
 **Operator impact.** A student, the operator, or anyone who steals the managed identity token (which is exactly the exercise) may create a VM, disk, IP, or App Service plan inside a lab resource group. That resource survives `reset` and `destroy`, keeps billing, and never appears in `terraform state`. The operator sees an error at the end of `destroy`, may assume it is transient, and leaves behind exactly the kind of resource that costs the most (for example, crypto-mining VMs created with Contributor or Owner).
 
 **Recommended fix.** Choose one approach and document it:
 - **(a)** Set `features { resource_group { prevent_deletion_if_contains_resources = false } }` in `terraform/providers.tf`. This matches the promise of atomic deletion for disposable, prefixed lab resource groups.
-- **(b)** Keep the default, but when `destroy` or `reset` fails, have `azrange.ps1` run `az resource list -g <lab_prefix>-apXX-rg` and print a prominent warning listing the resources that remain and are still billing.
+- **(b)** Keep the default, but when `destroy` or `reset` fails, have `aether.ps1` run `az resource list -g <lab_prefix>-apXX-rg` and print a prominent warning listing the resources that remain and are still billing.
 
 In both cases, add a post-destroy check to `verify.ps1` that confirms no `<lab_prefix>-ap0*-rg` resource group remains.
 
@@ -254,19 +254,19 @@ In both cases, add a post-destroy check to `verify.ps1` that confirms no `<lab_p
 **Fix applied.** `terraform/.terraform.lock.hcl` is now committed, and `.gitignore` no longer excludes it. Provider versions and hashes are pinned for every clone.
 
 **Further hardening (recommended).**
-- Run `terraform init -input=false -lockfile=readonly` in `azrange.ps1`.
+- Run `terraform init -input=false -lockfile=readonly` in `aether.ps1`.
 - Add an upper bound to `required_version` (for example `>= 1.6, < 2.0`).
 - Generate multi-platform hashes with `terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64`.
-- Note that `terraform/modules/hybrid-ad/dsc/AzRangeDC.ps1` marks PSGallery as Trusted on the DC. Module versions are pinned there, but their hashes are not verified.
+- Note that `terraform/modules/hybrid-ad/dsc/AetherDC.ps1` marks PSGallery as Trusted on the DC. Module versions are pinned there, but their hashes are not verified.
 
 **Fixed:** `terraform/.terraform.lock.hcl` is now committed with multi-platform hashes.
 
 ### M-3. EA, SSO, and sync passwords are passed in cleartext via `az vm run-command` arguments
 
 **Status:** Mitigated (deeper fix documented)
-**Files:** `azrange.ps1` (AP05 and AP06 seeding), `terraform/variables.tf`
+**Files:** `aether.ps1` (AP05 and AP06 seeding), `terraform/variables.tf`
 
-**What it is.** For AP05, `azrange.ps1` builds `--parameters "EaPassword=$eaPw"`. For AP06, it adds `"SsoPassword=$ssoPw"` and `"SyncPassword=$syncPw"`. The consequences:
+**What it is.** For AP05, `aether.ps1` builds `--parameters "EaPassword=$eaPw"`. For AP06, it adds `"SsoPassword=$ssoPw"` and `"SyncPassword=$syncPw"`. The consequences:
 
 1. On the operator's machine, `az` (`python.exe`) is launched with these values on its command line. They are visible to other processes run by the same user and recorded by process-creation telemetry (event 4688 with command line, Sysmon event 1, Defender for Endpoint `DeviceProcessEvents`).
 2. Legacy run-command (`--command-id RunPowerShellScript`) has no protected parameters. The values reach the `RunCommandWindows` extension on the DC, which leaves artifacts under `C:\Packages\Plugins\Microsoft.CPlat.Core.RunCommandWindows\...`, and they also appear in the API response.
@@ -278,7 +278,7 @@ The seed scripts themselves handle these values correctly: they only convert the
 
 **Recommended fix.** Switch to Managed Run Command (`az vm run-command create ... --protected-parameters`) and delete it afterward with `az vm run-command delete`. Alternatively, have the DC script read the secrets from a Key Vault in the lab resource group using the VM's managed identity. At minimum, pass secrets via stdin or a temporary ACL-restricted file that is deleted afterward, never via argv.
 
-**Fixed:** `azrange.ps1` now warns that run-command passes DC secrets via argv. The full refactor to Managed Run Command with `--protected-parameters` is documented but deferred, because it would risk the seeding reliability the lab depends on.
+**Fixed:** `aether.ps1` now warns that run-command passes DC secrets via argv. The full refactor to Managed Run Command with `--protected-parameters` is documented but deferred, because it would risk the seeding reliability the lab depends on.
 
 ### M-4. Docs invite sending lab telemetry to the operator's existing Sentinel / Log Analytics workspace
 
@@ -309,7 +309,7 @@ The seed scripts themselves handle these values correctly: they only convert the
 ### M-6. Auto-shutdown only deallocates the VMs. There is no budget, alert, or expiry
 
 **Status:** Fixed in this release
-**Files:** `terraform/modules/hybrid-ad/main.tf`, `terraform/modules/azure-resources/main.tf`, `docs/00-setup.md`, `azrange.ps1`
+**Files:** `terraform/modules/hybrid-ad/main.tf`, `terraform/modules/azure-resources/main.tf`, `docs/00-setup.md`, `aether.ps1`
 
 **What it is.** `azurerm_dev_test_global_vm_shutdown_schedule` only stops and deallocates the VMs. These resources keep billing:
 
@@ -323,9 +323,9 @@ The code contains no `azurerm_consumption_budget_*` resource and no expiry tag. 
 
 **Operator impact.** With "deploy and forget", compute stops at 22:00 CET, but a permanent residual cost of roughly EUR 15-20 per month remains. The operator may not notice it for months. If the lab is deployed after 22:00, the Windows VM runs for almost 24 hours before its first shutdown.
 
-**Recommended fix.** Add an optional `azurerm_consumption_budget_subscription` or `azurerm_consumption_budget_resource_group` (variables `budget_amount` and `budget_email`) with alerts at 50%, 80%, and 100%. Add an `expires_on` tag to the lab resource groups. Make `azrange.ps1 deploy` print the estimated cost while deallocated and remind the operator to run `./azrange.ps1 destroy`. Consider enabling `notification_settings` with an email 30 minutes before shutdown.
+**Recommended fix.** Add an optional `azurerm_consumption_budget_subscription` or `azurerm_consumption_budget_resource_group` (variables `budget_amount` and `budget_email`) with alerts at 50%, 80%, and 100%. Add an `expires_on` tag to the lab resource groups. Make `aether.ps1 deploy` print the estimated cost while deallocated and remind the operator to run `./aether.ps1 destroy`. Consider enabling `notification_settings` with an email 30 minutes before shutdown.
 
-**Fixed:** An optional `azurerm_consumption_budget_subscription` (opt-in via `budget_monthly_amount`) sends email alerts at 80% and 100%. `azrange.ps1 deploy` prints a residual-cost reminder, and the auto-shutdown time and time zone are exposed as variables.
+**Fixed:** An optional `azurerm_consumption_budget_subscription` (opt-in via `budget_monthly_amount`) sends email alerts at 80% and 100%. `aether.ps1 deploy` prints a residual-cost reminder, and the auto-shutdown time and time zone are exposed as variables.
 
 ### M-7. The secure default leaves the DC unreachable, and its public IP is always created
 
@@ -435,15 +435,15 @@ A parse error in `scripts/seed-ap06.ps1` has been corrected in this release.
 ### L-6. Lost local state orphans every billable resource, and there is no name-based purge
 
 **Status:** Fixed in this release
-**Files:** `terraform/providers.tf`, `azrange.ps1`, `docs/00-setup.md`
+**Files:** `terraform/providers.tf`, `aether.ps1`, `docs/00-setup.md`
 
-**What it is.** There is no `backend` block, `*.tfstate` is gitignored, and `azrange.ps1 destroy` depends entirely on `terraform destroy`. No cleanup mode works by name or tag. The resource groups have deterministic names (`<lab_prefix>-ap02/05/07/08-rg`), which makes manual cleanup feasible, but no script performs it.
+**What it is.** There is no `backend` block, `*.tfstate` is gitignored, and `aether.ps1 destroy` depends entirely on `terraform destroy`. No cleanup mode works by name or tag. The resource groups have deterministic names (`<lab_prefix>-ap02/05/07/08-rg`), which makes manual cleanup feasible, but no script performs it.
 
-**Operator impact.** If the operator deletes or re-clones the repository, switches machines, or loses the disk while the lab is deployed, `./azrange.ps1 destroy` reports nothing to destroy. The Windows VM, disks, IPs, and workspaces keep billing until someone finds them in the portal.
+**Operator impact.** If the operator deletes or re-clones the repository, switches machines, or loses the disk while the lab is deployed, `./aether.ps1 destroy` reports nothing to destroy. The Windows VM, disks, IPs, and workspaces keep billing until someone finds them in the portal.
 
-**Recommended fix.** Add `./azrange.ps1 purge`, or a fallback in `destroy`, that runs `az group delete -n <lab_prefix>-apXX-rg --yes` for the known resource groups and lists the Entra objects that must be cleaned up. Document the optional remote `azurerm` backend in `docs/00-setup.md` for operators who use several machines (see H-5).
+**Recommended fix.** Add `./aether.ps1 purge`, or a fallback in `destroy`, that runs `az group delete -n <lab_prefix>-apXX-rg --yes` for the known resource groups and lists the Entra objects that must be cleaned up. Document the optional remote `azurerm` backend in `docs/00-setup.md` for operators who use several machines (see H-5).
 
-**Fixed:** `azrange.ps1` has a new `purge` action that force-deletes the lab resource groups by name when the state is lost.
+**Fixed:** `aether.ps1` has a new `purge` action that force-deletes the lab resource groups by name when the state is lost.
 
 ### L-7. The AP02 Key Vault stays soft-deleted for 7 days with the service principal secret inside
 
@@ -497,7 +497,7 @@ The fixes above reduce operator risk, but they do not replace good operating pra
 - [ ] **Scope `admin_source_cidr` to your own `/32`.** Never use `*`, `Any`, `Internet`, or a wide prefix. Leave it `null` when you do not need RDP.
 - [ ] **Do not point the lab at your production Sentinel.** Use a dedicated, disposable Log Analytics workspace, and set a daily cap on it.
 - [ ] **Never set `dc_admin_password` to a password you use anywhere else.** Leave it unset so a random value is generated.
-- [ ] **Run `./azrange.ps1 destroy` as soon as you finish.** Auto-shutdown only deallocates the VMs. Disks, public IPs, storage, and workspaces keep billing, and AP07 stays exposed to the Internet while deployed.
+- [ ] **Run `./aether.ps1 destroy` as soon as you finish.** Auto-shutdown only deallocates the VMs. Disks, public IPs, storage, and workspaces keep billing, and AP07 stays exposed to the Internet while deployed.
 - [ ] **After `destroy`, check for leftovers by hand:**
   - [ ] No `<lab_prefix>-ap0*-rg` resource groups remain (`az group list`).
   - [ ] The tenant user-consent policy is back to its previous value (run `seed-ap01.ps1 -Remediate` against the lab tenant if needed).

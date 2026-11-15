@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Azure Attack Range health-check: confirms that the baseline and the active paths exist
+    AETHER health-check: confirms that the baseline and the active paths exist
     and reports the state of each vulnerable condition.
 #>
 [CmdletBinding()]
@@ -24,7 +24,7 @@ function Get-TfRaw($name) {
     } finally { Pop-Location }
 }
 
-Write-Host '=== Azure Attack Range - verify ===' -ForegroundColor Cyan
+Write-Host '=== AETHER - verify ===' -ForegroundColor Cyan
 
 # 1. Terraform outputs present
 Push-Location $TfDir

@@ -3,7 +3,7 @@
 #
 # AP05 - AD CS ESC1 (Enrollee-Supplies-Subject):
 #   Windows Server 2022 VM -> DC (throwaway forest) -> Enterprise
-#   Root CA -> vulnerable template 'AzRangeAuthESC1' + low-priv user.
+#   Root CA -> vulnerable template 'AetherAuthESC1' + low-priv user.
 #   The (low-priv) attacker requests a cert specifying SAN=UPN of a
 #   Domain Admin, authenticates via PKINIT -> DA TGT -> DCSync.
 #
@@ -45,7 +45,7 @@ locals {
 
   # Azure forbids 'Administrator' as the VM admin; this local SAM admin
   # DISAPPEARS when the DC is promoted (which is why the DSC set+enables the built-in).
-  admin_username = "azrangeadmin"
+  admin_username = "aetheradmin"
 
   lowpriv_upn = "${var.lowpriv_user_name}@${var.domain_fqdn}"
 
@@ -53,7 +53,7 @@ locals {
   # try() protects the [0] when random_password.dc_admin has count 0.
   dc_admin_password = local.need_dc ? coalesce(var.dc_admin_password, try(random_password.dc_admin[0].result, null)) : null
 
-  # SEPARATE password for the VM's local admin (azrangeadmin), which disappears on DC
+  # SEPARATE password for the VM's local admin (aetheradmin), which disappears on DC
   # promotion. Distinct from the domain EA so one leak is not both. [SECURITY.md L-3]
   vm_local_admin_password = local.need_dc ? try(random_password.vm_admin[0].result, null) : null
 
@@ -118,7 +118,7 @@ resource "random_password" "lowpriv" {
   override_special = "!#$%*()-_=+"
 }
 
-# VM local admin (azrangeadmin), distinct from the domain EA. [SECURITY.md L-3]
+# VM local admin (aetheradmin), distinct from the domain EA. [SECURITY.md L-3]
 resource "random_password" "vm_admin" {
   count            = local.need_dc ? 1 : 0
   length           = 24
@@ -222,7 +222,7 @@ resource "azurerm_network_interface_security_group_association" "ap05" {
 
 # ==================================================================
 # DC+CA VM: Windows Server 2022 Datacenter Gen2, Standard_B2ms.
-# admin 'azrangeadmin' (local SAM that disappears on promotion: which is why
+# admin 'aetheradmin' (local SAM that disappears on promotion: which is why
 # the DSC set+enables the built-in Administrator with dc_admin_password).
 # ==================================================================
 resource "azurerm_windows_virtual_machine" "dc" {
@@ -286,7 +286,7 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "dc" {
 
 # ==================================================================
 # DSC configuration packaging (AP02 storage pattern).
-#   archive_file zips dsc/ (only AzRangeDC.ps1) -> storage -> blob -> SAS
+#   archive_file zips dsc/ (only AetherDC.ps1) -> storage -> blob -> SAS
 #   -> extension. The configurationData.psd1 (allow domain-user/plaintext,
 #   needed because the enterprise CA uses a qualified domain credential)
 #   is uploaded as a SEPARATE source_content blob -> the zip keeps ONLY the .ps1.
@@ -299,7 +299,7 @@ data "archive_file" "dsc" {
   count       = local.need_dc ? 1 : 0
   type        = "zip"
   source_dir  = "${path.module}/dsc"
-  output_path = "${path.module}/AzRangeDC.zip"
+  output_path = "${path.module}/AetherDC.zip"
 }
 
 resource "azurerm_storage_account" "dsc" {
@@ -322,7 +322,7 @@ resource "azurerm_storage_container" "dsc" {
 
 resource "azurerm_storage_blob" "dsc" {
   count                  = local.need_dc ? 1 : 0
-  name                   = "AzRangeDC.zip"
+  name                   = "AetherDC.zip"
   storage_account_name   = azurerm_storage_account.dsc[0].name
   storage_container_name = azurerm_storage_container.dsc[0].name
   type                   = "Block"
@@ -334,7 +334,7 @@ resource "azurerm_storage_blob" "dsc" {
 # guard when compiling the MOF on the VM. Separate blob (not in the zip).
 resource "azurerm_storage_blob" "dsc_configdata" {
   count                  = local.need_dc ? 1 : 0
-  name                   = "AzRangeDC.ConfigData.psd1"
+  name                   = "AetherDC.ConfigData.psd1"
   storage_account_name   = azurerm_storage_account.dsc[0].name
   storage_container_name = azurerm_storage_container.dsc[0].name
   type                   = "Block"
@@ -401,7 +401,7 @@ data "azurerm_storage_account_sas" "dsc" {
 # ==================================================================
 resource "azurerm_virtual_machine_extension" "dsc" {
   count                      = local.need_dc ? 1 : 0
-  name                       = "AzRangeDC"
+  name                       = "AetherDC"
   virtual_machine_id         = azurerm_windows_virtual_machine.dc[0].id
   publisher                  = "Microsoft.Powershell"
   type                       = "DSC"
@@ -412,8 +412,8 @@ resource "azurerm_virtual_machine_extension" "dsc" {
     wmfVersion = "latest"
     configuration = {
       url      = azurerm_storage_blob.dsc[0].url
-      script   = "AzRangeDC.ps1"
-      function = "AzRangeDC"
+      script   = "AetherDC.ps1"
+      function = "AetherDC"
     }
     configurationData = {
       url = azurerm_storage_blob.dsc_configdata[0].url

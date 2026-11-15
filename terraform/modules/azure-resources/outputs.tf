@@ -3,12 +3,12 @@
 # AP01 conditional pattern: null when the flag is disabled.
 # ------------------------------------------------------------------
 output "ap02_vm_name" {
-  description = "Name of the azrange-ap02-web pivot host (null if AP02 is disabled)."
+  description = "Name of the aether-ap02-web pivot host (null if AP02 is disabled)."
   value       = var.enable_ap02 ? azurerm_linux_virtual_machine.web[0].name : null
 }
 
 output "ap02_vm_public_ip" {
-  description = "SSH public IP of the azrange-ap02-web pivot host (null if AP02 is disabled)."
+  description = "SSH public IP of the aether-ap02-web pivot host (null if AP02 is disabled)."
   value       = var.enable_ap02 ? azurerm_public_ip.ap02[0].ip_address : null
 }
 
@@ -110,7 +110,7 @@ output "ap08_mi_role" {
 }
 
 output "ap08_runbook_name" {
-  description = "Name of the embedded runbook (decoy azrange-ap08-maintenance). Null if AP08 disabled or runbook_mode='none' (pure misconfig)."
+  description = "Name of the embedded runbook (decoy aether-ap08-maintenance). Null if AP08 disabled or runbook_mode='none' (pure misconfig)."
   value       = local.ap08_runbook_name
 }
 

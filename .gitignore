@@ -14,7 +14,7 @@ tfplan
 *.plan
 
 # AP05 DSC package artifact (archive_file regenerates it on each plan/apply).
-AzRangeDC.zip
+AetherDC.zip
 .dsc-build/
 
 # Real variables (only the .example is versioned)

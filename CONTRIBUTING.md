@@ -1,4 +1,4 @@
-# Adding an attack path to the Azure Attack Range
+# Adding an attack path to AETHER
 
 The value of the range is that **others extend it**. A new path = a complete
 **Exploit -> Remediate -> Detect** triad. Follow this recipe (use AP01 as a living reference).
@@ -10,7 +10,7 @@ A path is not considered "ready" until it has all **5 pieces**:
 - [ ] **1. Flag** in `terraform/variables.tf` -> `variable "enable_apXX" { default = false }`.
 - [ ] **2. Misconfig as code**: the vulnerable resource, in whichever domain module applies
       (`entra-identity`, `azure-resources` or `hybrid-ad`), wrapped in `count = var.enable_apXX ? 1 : 0`.
-- [ ] **3. Seed** (when Terraform can't reach it): idempotent `scripts/seed-apXX.ps1`, invoked by `azrange.ps1`.
+- [ ] **3. Seed** (when Terraform can't reach it): idempotent `scripts/seed-apXX.ps1`, invoked by `aether.ps1`.
 - [ ] **4. Doc** `docs/attack-paths/APxx-<slug>.md` using the template below.
 - [ ] **5. Detection**: `detections/kql/APxx-*.kql` **and** `detections/sigma/APxx-*.yml`.
 

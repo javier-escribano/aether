@@ -37,13 +37,13 @@ terraform {
   #   resource_group_name  = "my-tfstate-rg"
   #   storage_account_name = "mytfstatesa"
   #   container_name       = "tfstate"
-  #   key                  = "azure-attack-range.tfstate"
+  #   key                  = "aether.tfstate"
   #   use_azuread_auth     = true
   # }
 }
 
 # Pinned to the TEST tenant/subscription (see variables.tf). Terraform refuses to
-# run against any other tenant; azrange.ps1 also cross-checks the active az context.
+# run against any other tenant; aether.ps1 also cross-checks the active az context.
 provider "azuread" {
   tenant_id = var.expected_tenant_id
 }

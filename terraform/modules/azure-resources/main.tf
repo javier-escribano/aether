@@ -36,7 +36,7 @@ locals {
   vm_name = "${var.lab_prefix}-ap02-web"
   sp_name = "${var.lab_prefix}-ap02-automation"
 
-  # Key Vault: base 'azrange-ap02-kv-' (16) + suffix 4-6 => <=24 chars.
+  # Key Vault: base 'aether-ap02-kv-' (16) + suffix 4-6 => <=24 chars.
   kv_name = "${var.lab_prefix}-ap02-kv-${local.suffix}"
 
   # Storage: 3-24 lowercase alphanumeric, NO hyphens.
@@ -46,7 +46,7 @@ locals {
 
   # Initial access to the VM (represents a prior RCE/webshell, teaching
   # level). Port 22 is opened to the Internet on purpose.
-  admin_username = "azrangeadmin"
+  admin_username = "aetheradmin"
 }
 
 # ------------------------------------------------------------------
@@ -157,7 +157,7 @@ resource "random_password" "vm" {
 }
 
 # ==================================================================
-# Pivot host azrange-ap02-web: Ubuntu 22.04 LTS, Standard_B1s (cheapest
+# Pivot host aether-ap02-web: Ubuntu 22.04 LTS, Standard_B1s (cheapest
 # SKU), with a system-assigned Managed Identity.
 # ==================================================================
 resource "azurerm_linux_virtual_machine" "web" {
@@ -272,7 +272,7 @@ resource "azurerm_key_vault" "ap02" {
 }
 
 # ==================================================================
-# Lateral-pivot identity: service principal azrange-ap02-automation.
+# Lateral-pivot identity: service principal aether-ap02-automation.
 # Its client secret is wired declaratively into the Key Vault. Stealing it
 # yields a reusable IDENTITY of broader scope than the VM's ephemeral MI.
 # ==================================================================
@@ -290,7 +290,7 @@ resource "azuread_service_principal" "automation" {
 resource "azuread_application_password" "automation" {
   count                 = var.enable_ap02 ? 1 : 0
   application_object_id = azuread_application.automation[0].object_id
-  display_name          = "azrange-ap02-automation-secret"
+  display_name          = "aether-ap02-automation-secret"
 }
 
 # ------------------------------------------------------------------
@@ -331,7 +331,7 @@ resource "azurerm_storage_blob" "flag" {
   storage_account_name   = azurerm_storage_account.loot[0].name
   storage_container_name = azurerm_storage_container.loot[0].name
   type                   = "Block"
-  source_content         = "AZRANGE{ap02_vm_mi_to_keyvault_to_sp_to_storage}\n"
+  source_content         = "AETHER{ap02_vm_mi_to_keyvault_to_sp_to_storage}\n"
 }
 
 # SP data permission on the storage (closes the lateral chain).

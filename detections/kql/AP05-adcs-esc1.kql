@@ -1,7 +1,7 @@
 // =====================================================================
 // AP05 — AD CS ESC1 (Enrollee-Supplies-Subject) on a hybrid DC
-//        Chain: a LOW-privilege user (AZRANGE\ap05user) enrolls the
-//        honeytemplate 'AzRangeAuthESC1' specifying SAN = UPN of a Domain
+//        Chain: a LOW-privilege user (AETHER\ap05user) enrolls the
+//        honeytemplate 'AetherAuthESC1' specifying SAN = UPN of a Domain
 //        Admin  ->  authenticates that certificate via PKINIT  ->  obtains a TGT
 //        as the DA  ->  DCSync.
 //
@@ -48,18 +48,18 @@
 // SUPPLEMENT: Microsoft Defender for Identity brings native ESC1 detection
 //             (certificate forge / suspicious request). Use in parallel.
 //
-// Author: Azure Attack Range   Date: 2026-11-14
+// Author: AETHER   Date: 2026-11-14
 // =====================================================================
 
-let esc1_template = "AzRangeAuthESC1";   // = var.esc1_template_name  (output ap05_esc1_template_name)
+let esc1_template = "AetherAuthESC1";   // = var.esc1_template_name  (output ap05_esc1_template_name)
 let lookback      = 1d;
 let corr_window   = 10m;                // window issuance(4887) -> PKINIT(4768) for OUTPUT 2
 
 // ---------------------------------------------------------------------
 // SIGNAL A — T1649: request (4886) and ISSUANCE (4887) of a certificate over
-//           the ESC1 honeytemplate. Enrolling 'AzRangeAuthESC1' should NEVER occur
+//           the ESC1 honeytemplate. Enrolling 'AetherAuthESC1' should NEVER occur
 //           in normal operation -> every hit is suspicious on its own.
-//           'Requester' = requesting account (expected: AZRANGE\ap05user, low-priv).
+//           'Requester' = requesting account (expected: AETHER\ap05user, low-priv).
 //           'Subject'   = subject DN (the SAN = UPN of the DA does NOT travel reliably here).
 // ---------------------------------------------------------------------
 let SignalA_enroll =
@@ -83,7 +83,7 @@ let SignalA_enroll =
 // ---------------------------------------------------------------------
 // SIGNAL B — seeding / template tampering: 4899 (template
 //           updated) + 4900 (template security updated). The very
-//           seeding of 'AzRangeAuthESC1' by seed-ap05 generates these events: the
+//           seeding of 'AetherAuthESC1' by seed-ap05 generates these events: the
 //           defender SEES the vuln being planted (teaching point). It also fires with
 //           remediation (-Remediate clears the flags / unpublishes).
 //           'SubjectUserName' = account that modified the template (expected: EA).

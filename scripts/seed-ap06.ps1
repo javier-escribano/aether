@@ -66,7 +66,7 @@ param(
     [ValidateSet('silver_ticket', 'sync_dcsync', 'both')]
     [string]$SsoMode = 'both',
     [string]$SsoAccountName  = 'AZUREADSSOACC',
-    [string]$SyncAccountName = 'Sync_AZRANGE',
+    [string]$SyncAccountName = 'Sync_AETHER',
     # Known passwords (they land in the Terraform state and are passed here).
     # Required in seed mode; NOT in -Remediate (which generates fresh passwords).
     [string]$SsoPassword,
@@ -260,7 +260,7 @@ if ($SsoMode -eq 'silver_ticket' -or $SsoMode -eq 'both') {
         New-ADComputer -Name $SsoAccountName -SAMAccountName $ssoSam `
             -ServicePrincipalNames $SsoSpns `
             -AccountPassword $ssoSec -PasswordNeverExpires:$true -Enabled $true `
-            -Description 'Seamless SSO computer account (Azure Attack Range AP06; key NOT rotated by design)' `
+            -Description 'Seamless SSO computer account (AETHER AP06; key NOT rotated by design)' `
             -Server $DomainFqdn -Credential $EA
 
         $spnList = $SsoSpns -join ', '
@@ -284,7 +284,7 @@ if ($SsoMode -eq 'sync_dcsync' -or $SsoMode -eq 'both') {
         $syncSec = ConvertTo-SecureString $SyncPassword -AsPlainText -Force
         New-ADUser -Name $SyncAccountName -SamAccountName $SyncAccountName `
             -AccountPassword $syncSec -Enabled $true -PasswordNeverExpires $true `
-            -Description 'Entra Connect sync account (Azure Attack Range AP06; on-prem DCSync)' `
+            -Description 'Entra Connect sync account (AETHER AP06; on-prem DCSync)' `
             -Server $DomainFqdn -Credential $EA
         Write-Host "[+] $SyncAccountName created." -ForegroundColor Yellow
         $sync = Get-SyncUser

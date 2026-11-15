@@ -1,5 +1,5 @@
 <#
-    AzRangeDC.ps1 - DSC configuration of the AP05 BENIGN BASE.
+    AetherDC.ps1 - DSC configuration of the AP05 BENIGN BASE.
 
     Brings up ONLY the base: throwaway AD DS forest + Enterprise Root CA
     + low-priv user + CA/Kerberos auditing + StrongCertificateBinding
@@ -38,7 +38,7 @@ if (-not (Get-Module -ListAvailable -Name ActiveDirectoryCSDsc | Where-Object { 
     Install-Module -Name ActiveDirectoryCSDsc -RequiredVersion 5.0.0 -Force -AllowClobber | Out-Null
 }
 
-Configuration AzRangeDC {
+Configuration AetherDC {
     param(
         [Parameter(Mandatory = $true)] [string]       $DomainFqdn,
         [Parameter(Mandatory = $true)] [string]       $DomainNetbios,
@@ -46,7 +46,7 @@ Configuration AzRangeDC {
         [Parameter(Mandatory = $true)] [pscredential] $SafemodeCredential,
         [Parameter(Mandatory = $true)] [pscredential] $LowPrivCredential,
         [string] $LowPrivUser           = 'ap05user',
-        [string] $CaCommonName          = 'azrange-CA',
+        [string] $CaCommonName          = 'aether-CA',
         [string] $StrongCertBindingMode = '1'
     )
 
@@ -76,7 +76,7 @@ Configuration AzRangeDC {
         WindowsFeature RSATADCS  { Name = 'RSAT-ADCS-Mgmt';      Ensure = 'Present' }
 
         # 2) The built-in Administrator (RID 500) persists as EA after DCPromo;
-        #    the SAM admin 'azrangeadmin' DISAPPEARS (DCs have no local accounts
+        #    the SAM admin 'aetheradmin' DISAPPEARS (DCs have no local accounts
         #    except DSRM). Set+enable with dc_admin_password BEFORE promoting,
         #    so the seed later authenticates as DOMAIN\Administrator.
         User BuiltinAdmin {

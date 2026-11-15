@@ -2,7 +2,7 @@ title: AP07 - Public Storage misconfig and key recovery (allowBlobPublicAccess /
 id: c4f8e1a6-2b7d-4e39-9a1f-6c3b8d05e2f4
 status: experimental
 description: |
-  Detects the MANAGEMENT PLANE of the AP07 chain of Azure Attack Range (exfiltration in the Azure
+  Detects the MANAGEMENT PLANE of the AP07 chain of AETHER (exfiltration in the Azure
   storage plane). A storage account is deployed / drifted to vulnerable with TWO anonymous
   access gates: at the ACCOUNT level allowBlobPublicAccess=true
   (Microsoft.Storage/storageAccounts/write) and at the CONTAINER level publicAccess=blob|container
@@ -23,7 +23,7 @@ references:
   - https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-configure
   - https://learn.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
   - https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations
-author: Azure Attack Range
+author: AETHER
 date: 2026-11-15
 logsource:
   product: azure

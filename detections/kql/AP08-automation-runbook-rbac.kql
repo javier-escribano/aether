@@ -63,7 +63,7 @@
 //       HINT from Properties and, with high fidelity, from the JobStreams (ResultDescription); it NEVER
 //       gates the row (OR-not-AND, AP04/AP07 lesson: do not drop the chain).
 //     * The Automation Account name carries a random suffix -> this KQL anchors on the FIXED RG
-//       ('azrange-ap08-rg') and on the FIXED DECOY runbook ('azrange-ap08-maintenance'); fill
+//       ('aether-ap08-rg') and on the FIXED DECOY runbook ('aether-ap08-maintenance'); fill
 //       mi_principal_id with the output ap08_mi_principal_id to activate the golden filter.
 //     * If your DCR/pipeline serializes the Automation fields (RunbookName_s, JobId_g,
 //       StreamType_s, ResultDescription) differently, adjust against a real
@@ -72,13 +72,13 @@
 //   Managed COMPLEMENT: Microsoft Defender for Cloud (anomalous role assignment) + Azure Policy
 //     (deny Owner/UAA to automation identities) + PIM (no standing Owner/UAA). Use in parallel.
 //
-//   Author: Azure Attack Range   Date: 2026-11-15
+//   Author: AETHER   Date: 2026-11-15
 // =====================================================================
 
 let lookback         = 1d;
 let corr_window      = 20m;                        // window job-launch -> MI-grant (OUTPUT 2)
-let rg_name          = "azrange-ap08-rg";          // = ${lab_prefix}-ap08-rg (output ap08_resource_group); "" = any RG
-let runbook_name     = "azrange-ap08-maintenance"; // = output ap08_runbook_name (fixed decoy); "" = any runbook
+let rg_name          = "aether-ap08-rg";          // = ${lab_prefix}-ap08-rg (output ap08_resource_group); "" = any RG
+let runbook_name     = "aether-ap08-maintenance"; // = output ap08_runbook_name (fixed decoy); "" = any runbook
 let mi_principal_id  = "";                          // = output ap08_mi_principal_id (objectId of the system-assigned MI).
                                                     //   FILL IN: it is the GOLDEN filter (Caller==MI). "" = does NOT filter (broader
                                                     //   triage over all roleAssignments/write of the RG; OR-not-AND).

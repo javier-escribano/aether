@@ -21,7 +21,7 @@
 #                         OVER-PERMISSIONED credential (long-lived account SAS).
 #   3. Auth pivot:    uses the SAS to read /sensitive-data/customers.csv
 #                         (PRIVATE container of the SAME account) -> exfiltrates
-#                         the AZRANGE{...} jewel. The SAS carries write/delete
+#                         the AETHER{...} jewel. The SAS carries write/delete
 #                         -> demonstrable escalation/tampering branch.
 #
 # Repo feature-flag pattern: every vulnerable resource carries
@@ -59,7 +59,7 @@ locals {
   ap07_rg_name = "${var.lab_prefix}-ap07-rg"
 
   # Storage: 3-24 lowercase alphanumeric, NO hyphens (AP02 style).
-  # "azrange" (7) + "ap07" (4) + suffix (5) = 16 chars with the default prefix.
+  # "aether" (7) + "ap07" (4) + suffix (5) = 16 chars with the default prefix.
   ap07_sa_name = "${lower(replace(var.lab_prefix, "-", ""))}ap07${local.ap07_suffix}"
 
   # --- Secondary gate for the SAS mode ------------------------------
@@ -185,7 +185,7 @@ resource "azurerm_storage_container" "ap07_sensitive" {
 # ------------------------------------------------------------------
 # Crown jewel: customers.csv in the PRIVATE container.
 # 100% SYNTHETIC PII (.invalid domains, fictitious tokens). The target
-# of the authenticated pivot (step 3). Contains the AZRANGE{...} flag.
+# of the authenticated pivot (step 3). Contains the AETHER{...} flag.
 # ------------------------------------------------------------------
 resource "azurerm_storage_blob" "ap07_jewel" {
   count                  = var.enable_ap07 ? 1 : 0
@@ -199,7 +199,7 @@ resource "azurerm_storage_blob" "ap07_jewel" {
   # cells with no leading spaces (avoids the <<- trimming ambiguity).
   source_content = <<CSV
 id,full_name,email,city,plan,last_payment_token,notes
-1001,Alice Ficticia,alice@example.invalid,Madrid,enterprise,tok_0000111122223333,AZRANGE{ap07_public_blob_to_sas_to_private_exfil}
+1001,Alice Ficticia,alice@example.invalid,Madrid,enterprise,tok_0000111122223333,AETHER{ap07_public_blob_to_sas_to_private_exfil}
 1002,Bruno Imaginario,bruno@example.invalid,Lisbon,pro,tok_4444555566667777,synthetic record - no real PII
 1003,Carla Inventada,carla@example.invalid,Paris,free,tok_8888999900001111,synthetic record - no real PII
 1004,Diego Ejemplo,diego@example.invalid,Rome,pro,tok_2222333344445555,synthetic record - no real PII

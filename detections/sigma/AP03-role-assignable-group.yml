@@ -1,4 +1,4 @@
-title: Low-Priv Owner Self-Add to Role-Assignable Group Carrying Privileged Role Administrator (Azure Attack Range AP03)
+title: Low-Priv Owner Self-Add to Role-Assignable Group Carrying Privileged Role Administrator (AETHER AP03)
 id: c7e4a9b2-3f81-4d6e-9a05-1b2c3d4e5f60
 status: experimental
 description: >
@@ -19,7 +19,7 @@ references:
   - https://attack.mitre.org/techniques/T1078/004/
   - https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/groups-concept
   - https://learn.microsoft.com/en-us/entra/identity/monitoring-health/reference-azure-monitor-audit-log-schema
-author: Azure Attack Range
+author: AETHER
 date: 2026-11-14
 logsource:
   product: azure
@@ -33,7 +33,7 @@ detection:
     OperationName: 'Add owner to group'
   # Anchor to the lab's privileged group (adjust to the actual lab_prefix).
   selection_group:
-    TargetResources|contains: 'azrange-ap03-role-admins'
+    TargetResources|contains: 'aether-ap03-role-admins'
   # --- Stages 2/5 (T1098.003 / T1078.004): assignment of a privileged directory
   #     role (PRA to the group) or self-grant of Global Administrator ---
   selection_roleops:

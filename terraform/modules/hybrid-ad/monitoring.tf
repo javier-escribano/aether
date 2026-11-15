@@ -53,14 +53,14 @@ resource "azurerm_monitor_data_collection_rule" "ap05" {
 
   destinations {
     log_analytics {
-      name                  = "azrange-ap05-law-dest"
+      name                  = "aether-ap05-law-dest"
       workspace_resource_id = local.law_id
     }
   }
 
   data_flow {
     streams      = ["Microsoft-SecurityEvent"]
-    destinations = ["azrange-ap05-law-dest"]
+    destinations = ["aether-ap05-law-dest"]
   }
 
   data_sources {

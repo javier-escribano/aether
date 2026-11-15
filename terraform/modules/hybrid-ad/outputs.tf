@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------
 # Outputs of the hybrid-ad module.
 # AP02 conditional pattern: null when enable_ap05 = false.
-# azrange.ps1 consumes ap05_resource_group / ap05_dc_vm_name /
+# aether.ps1 consumes ap05_resource_group / ap05_dc_vm_name /
 # ap05_dc_admin_password / ap05_domain_* / ap05_ca_name /
 # ap05_esc1_template_name for the seed run-command at deploy.
 # ------------------------------------------------------------------
@@ -11,7 +11,7 @@ output "ap05_resource_group" {
 }
 
 output "ap05_dc_vm_name" {
-  description = "Name of the DC+CA VM (null if AP05 disabled). azrange.ps1 uses it as a sentinel and for the run-command."
+  description = "Name of the DC+CA VM (null if AP05 disabled). aether.ps1 uses it as a sentinel and for the run-command."
   value       = var.enable_ap05 ? azurerm_windows_virtual_machine.dc[0].name : null
 }
 
@@ -70,7 +70,7 @@ output "ap05_attacker_hint" {
     "Certify.exe find /vulnerable -> request the template ", var.esc1_template_name,
     " with SAN=UPN of a Domain Admin on the CA ", var.ca_common_name,
     " -> authenticate via PKINIT -> DA TGT -> DCSync. ",
-    "COST NOTE: always-on Windows VM; `./azrange.ps1 destroy` (or enable_ap05=false) when you are done.",
+    "COST NOTE: always-on Windows VM; `./aether.ps1 destroy` (or enable_ap05=false) when you are done.",
   ]) : null
 }
 
@@ -97,11 +97,11 @@ output "ap05_lowpriv_password" {
 # AP06 - Entra Connect / Seamless SSO (null if enable_ap06 = false).
 # None of the ap05_* outputs above change: ap05_dc_vm_name still returns
 # null when enable_ap05=false EVEN IF the shared VM exists because of AP06, so
-# that the AP05 sentinel of azrange.ps1/verify.ps1 is NOT poisoned. AP06
+# that the AP05 sentinel of aether.ps1/verify.ps1 is NOT poisoned. AP06
 # uses its OWN sentinel ap06_dc_vm_name.
 # ==================================================================
 output "ap06_dc_vm_name" {
-  description = "Name of the shared DC VM as seen from AP06 (null if AP06 disabled). SENTINEL of azrange.ps1/verify.ps1 (does NOT reuse ap05_dc_vm_name)."
+  description = "Name of the shared DC VM as seen from AP06 (null if AP06 disabled). SENTINEL of aether.ps1/verify.ps1 (does NOT reuse ap05_dc_vm_name)."
   value       = var.enable_ap06 ? azurerm_windows_virtual_machine.dc[0].name : null
 }
 
@@ -161,7 +161,7 @@ output "ap06_attacker_hint" {
     " impersonating any synchronized user (T1558.001). 3) Authenticate to the CLOUD as that user WITHOUT their password (T1550). ",
     "The key of ", var.sso_account_name, "$ NEVER rotates by default -> eternal persistence. ",
     "Remediate in-place: seed-ap06.ps1 -Remediate (rotates the key 2x + removes DCSync + disables sync). ",
-    "COST NOTE: reuses the AP05 DC; if AP05 is off, it bills a VM. `./azrange.ps1 destroy` (or both flags false) when you are done.",
+    "COST NOTE: reuses the AP05 DC; if AP05 is off, it bills a VM. `./aether.ps1 destroy` (or both flags false) when you are done.",
   ]) : null
 }
 

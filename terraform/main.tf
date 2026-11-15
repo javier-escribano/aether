@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------
-# Azure Attack Range — module orchestration
+# AETHER — module orchestration
 # ------------------------------------------------------------------
 # Pattern: one module per DOMAIN (identity / Azure resources / hybrid).
 # Vulnerabilities are FEATURE FLAGS inside the module they belong to,
@@ -85,7 +85,7 @@ module "hybrid_ad" {
 
   # AP06 — Entra Connect / Seamless SSO (reuses the AP05 DC via need_dc).
   # domain_fqdn/domain_netbios are already inherited (domain_netbios uses the module
-  # default 'AZRANGE', same as AP05).
+  # default 'AETHER', same as AP05).
   enable_ap06       = var.enable_ap06
   sso_mode          = var.sso_mode
   sso_account_name  = var.sso_account_name

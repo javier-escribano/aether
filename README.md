@@ -1,9 +1,9 @@
-# Azure Attack Range
+# AETHER
 
-> A self-hostable, reproducible **Azure + Entra ID + hybrid Active Directory** cyber range, deployed as code.
+> **A**zure **E**ntra **T**enant **H**acking & **E**xploitation **R**ange — a self-hostable, reproducible **Azure + Entra ID + hybrid Active Directory** cyber range, deployed as code.
 > Every attack path ships with its exploit walkthrough, its remediation, and its detection.
 
-Azure Attack Range is a training lab for red teamers, blue teamers, and purple teams who want to practise cloud identity attacks and defences in an environment they fully control. Think of it as **GOAD for Azure**: where GOAD gives you a vulnerable on-premises Active Directory forest, this project gives you a deliberately misconfigured Entra ID tenant, Azure subscription, and optional hybrid AD domain controller, all described in Terraform and brought up or torn down with a single command. It is aimed at practitioners preparing for cloud and AD certifications (CARTP, CARTE, CRTO, CRTE), detection engineers who need realistic telemetry, and instructors who need a lab that every student can rebuild identically.
+AETHER is a training lab for red teamers, blue teamers, and purple teams who want to practise cloud identity attacks and defences in an environment they fully control. Think of it as **GOAD for Azure**: where GOAD gives you a vulnerable on-premises Active Directory forest, this project gives you a deliberately misconfigured Entra ID tenant, Azure subscription, and optional hybrid AD domain controller, all described in Terraform and brought up or torn down with a single command. It is aimed at practitioners preparing for cloud and AD certifications (CARTP, CARTE, CRTO, CRTE), detection engineers who need realistic telemetry, and instructors who need a lab that every student can rebuild identically.
 
 > [!CAUTION]
 > This project deploys **intentionally vulnerable** configurations. Deploy it **only** into a dedicated, throwaway **test** tenant and subscription that you own. **Never** point it at a production or corporate tenant. Read [Safety and cost](#safety-and-cost) and [SECURITY.md](SECURITY.md) before your first deployment.
@@ -60,7 +60,7 @@ Each path is enabled with its own flag (`enable_ap01` ... `enable_ap08`) in `ter
 ## Architecture
 
 ```
-            ./azrange.ps1  (deploy | reset | destroy | verify | status)
+            ./aether.ps1  (deploy | reset | destroy | verify | status)
                                |
                  terraform/ (root module, feature flags)
           ┌────────────────────┼─────────────────────┐
@@ -92,11 +92,11 @@ Where Terraform cannot express a precondition cleanly (tenant consent policy, AD
 
 | Command | What it does |
 |---------|--------------|
-| `./azrange.ps1 deploy` | Runs `terraform apply` with your tfvars and then the seed scripts for the enabled paths. Idempotent. |
-| `./azrange.ps1 verify` | Runs `scripts/verify.ps1`, a health check confirming that each enabled path is in its expected state. |
-| `./azrange.ps1 status` | Shows what is currently deployed. |
-| `./azrange.ps1 reset` | Keeps the base environment but removes the vulnerabilities. |
-| `./azrange.ps1 destroy` | Tears down every resource the range created. |
+| `./aether.ps1 deploy` | Runs `terraform apply` with your tfvars and then the seed scripts for the enabled paths. Idempotent. |
+| `./aether.ps1 verify` | Runs `scripts/verify.ps1`, a health check confirming that each enabled path is in its expected state. |
+| `./aether.ps1 status` | Shows what is currently deployed. |
+| `./aether.ps1 reset` | Keeps the base environment but removes the vulnerabilities. |
+| `./aether.ps1 destroy` | Tears down every resource the range created. |
 
 ---
 
@@ -135,8 +135,8 @@ The simplest setup is a dedicated lab administrator that is Global Administrator
 
 ```powershell
 # 1. Clone
-git clone https://github.com/javier-escribano/azure-attack-range.git
-cd azure-attack-range
+git clone https://github.com/javier-escribano/aether.git
+cd aether
 
 # 2. Sign in to your TEST tenant and select your TEST subscription
 az login --tenant <YOUR_TEST_TENANT>.onmicrosoft.com
@@ -149,13 +149,13 @@ cp terraform.tfvars.example terraform.tfvars
 cd ..
 
 # 4. Deploy (idempotent)
-./azrange.ps1 deploy
+./aether.ps1 deploy
 
 # 5. Confirm every enabled path is in the expected state
-./azrange.ps1 verify
+./aether.ps1 verify
 
 # 6. When the session is over, tear everything down
-./azrange.ps1 destroy
+./aether.ps1 destroy
 ```
 
 > [!TIP]
@@ -177,7 +177,7 @@ Then open the document for the path you enabled under [`docs/attack-paths/`](doc
   - AP02 runs a small VM and public IP.
   - **AP05 and AP06 bill compute**: they run a Windows Server domain controller. The module enables daily auto-shutdown, but you should still destroy it when you are done.
   - Configure a **budget with alerts** in Cost Management (for example 20 USD/EUR per month with alerts at 50/80/100 percent).
-- **Always run `./azrange.ps1 destroy` when you finish a session.** Disabling a flag and re-deploying also removes that path's resources.
+- **Always run `./aether.ps1 destroy` when you finish a session.** Disabling a flag and re-deploying also removes that path's resources.
 - **Treat Terraform state as toxic.** `terraform.tfstate` contains **cleartext credentials**: generated domain administrator passwords, lab user passwords, leaked SAS tokens or storage keys, and similar values. Keep it local or in a private, access-controlled backend, never commit it (the shipped `.gitignore` blocks `*.tfstate*` and `terraform.tfvars`; do not remove those entries), and delete it once the lab is destroyed.
 
 ---
@@ -217,11 +217,11 @@ CI validates the code only; it never deploys anything. Validating an actual `app
 ## Repository layout
 
 ```
-azure-attack-range/
+aether/
 ├─ README.md
 ├─ SECURITY.md                  operator-risk review and vulnerability reporting
 ├─ CONTRIBUTING.md              how to add a new attack path
-├─ azrange.ps1                  orchestrator: deploy | reset | destroy | verify | status
+├─ aether.ps1                   orchestrator: deploy | reset | destroy | verify | status
 ├─ .gitignore                   blocks Terraform state and secrets (do not remove)
 ├─ .github/workflows/ci.yml     fmt, validate, PowerShell lint
 ├─ docs/
@@ -260,4 +260,4 @@ This range builds on ideas from, and is complementary to, other open labs: **GOA
 
 ## Disclaimer
 
-Azure Attack Range is provided for **authorized educational, training, and purple-team use only**, on infrastructure you own or are explicitly permitted to test. The techniques documented here are publicly known and are included so that defenders can understand, remediate, and detect them. Do not use this project, or anything learned from it, against systems without authorization. The authors and contributors accept no liability for misuse or for cloud charges incurred by running the lab. Use it only in tenants and subscriptions you control, and destroy it when you are done.
+AETHER is provided for **authorized educational, training, and purple-team use only**, on infrastructure you own or are explicitly permitted to test. The techniques documented here are publicly known and are included so that defenders can understand, remediate, and detect them. Do not use this project, or anything learned from it, against systems without authorization. The authors and contributors accept no liability for misuse or for cloud charges incurred by running the lab. Use it only in tenants and subscriptions you control, and destroy it when you are done.

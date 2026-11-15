@@ -3,7 +3,7 @@
 #
 # 100% DECLARATIVE core (no seed, needs_seed=none). The vulnerable
 # combination is two facts that Terraform sets:
-#   (a) azuread_user.lab[0] (azrange-user1), a LOW-privilege user,
+#   (a) azuread_user.lab[0] (aether-user1), a LOW-privilege user,
 #       is the ONLY owner of the group (owners = [...]), and
 #   (b) the group is role-assignable (assignable_to_role = true) and
 #       carries the 'Privileged Role Administrator' (PRA) directory
@@ -34,7 +34,7 @@
 #   - LATENCY: after the self-add you must re-authenticate so the token
 #     picks up the inherited role (noted in the 'Exploit' doc).
 #
-# TEARDOWN: `./azrange.ps1 reset` re-applies with enable_ap03=false
+# TEARDOWN: `./aether.ps1 reset` re-applies with enable_ap03=false
 # (count = 0) -> destroys the group + role assignment and reverts the
 # self-add; members = [] also reverts it on any intermediate re-apply.
 # Objects created after escalating to GA stay OUTSIDE the Terraform
@@ -72,7 +72,7 @@ resource "azuread_group" "ap03_role_admins" {
   assignable_to_role = true
 
   # MISCONFIG (the misconfigured link): the low-privilege user
-  # azrange-user1 is the ONLY owner. By default, an owner can edit the
+  # aether-user1 is the ONLY owner. By default, an owner can edit the
   # membership of THEIR role-assignable group -> self-add.
   owners = [azuread_user.lab[0].object_id]
 

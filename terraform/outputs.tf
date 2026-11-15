@@ -21,7 +21,7 @@ output "ap01_consent_url" {
 
 # --- AP02 (null if enable_ap02 = false) ---
 output "ap02_vm_public_ip" {
-  description = "SSH public IP of the azrange-ap02-web pivot host."
+  description = "SSH public IP of the aether-ap02-web pivot host."
   value       = module.azure_resources.ap02_vm_public_ip
 }
 
@@ -79,12 +79,12 @@ output "ap04_attacker_hint" {
 
 # --- AP05 (null if enable_ap05 = false) ---
 output "ap05_resource_group" {
-  description = "AP05 resource group (consumed by azrange.ps1 for the seed run-command)."
+  description = "AP05 resource group (consumed by aether.ps1 for the seed run-command)."
   value       = module.hybrid_ad.ap05_resource_group
 }
 
 output "ap05_dc_vm_name" {
-  description = "Name of the DC+CA VM (AP05 sentinel; consumed by azrange.ps1)."
+  description = "Name of the DC+CA VM (AP05 sentinel; consumed by aether.ps1)."
   value       = module.hybrid_ad.ap05_dc_vm_name
 }
 
@@ -99,7 +99,7 @@ output "ap05_domain_fqdn" {
 }
 
 output "ap05_domain_netbios" {
-  description = "NetBIOS of AP05's domain (consumed by azrange.ps1 to qualify the EA credential)."
+  description = "NetBIOS of AP05's domain (consumed by aether.ps1 to qualify the EA credential)."
   value       = module.hybrid_ad.ap05_domain_netbios
 }
 
@@ -142,15 +142,15 @@ output "ap05_lowpriv_password" {
 
 # --- AP06 (null if enable_ap06 = false) ---
 # Entra Connect / Seamless SSO over the SAME DC as AP05 (shared substrate).
-# OWN sentinel ap06_dc_vm_name (does NOT reuse AP05's): azrange.ps1/verify.ps1
+# OWN sentinel ap06_dc_vm_name (does NOT reuse AP05's): aether.ps1/verify.ps1
 # consume it for AP06's seed/health-check without poisoning AP05's.
 output "ap06_dc_vm_name" {
-  description = "Name of the shared DC VM as seen from AP06 (AP06 sentinel; consumed by azrange.ps1/verify.ps1)."
+  description = "Name of the shared DC VM as seen from AP06 (AP06 sentinel; consumed by aether.ps1/verify.ps1)."
   value       = module.hybrid_ad.ap06_dc_vm_name
 }
 
 output "ap06_resource_group" {
-  description = "Resource group of the shared DC as seen from AP06 (consumed by azrange.ps1 for the seed run-command)."
+  description = "Resource group of the shared DC as seen from AP06 (consumed by aether.ps1 for the seed run-command)."
   value       = module.hybrid_ad.ap06_resource_group
 }
 
@@ -160,12 +160,12 @@ output "ap06_dc_public_ip" {
 }
 
 output "ap06_domain_fqdn" {
-  description = "FQDN of AP06's throwaway forest (consumed by azrange.ps1 for the seed)."
+  description = "FQDN of AP06's throwaway forest (consumed by aether.ps1 for the seed)."
   value       = module.hybrid_ad.ap06_domain_fqdn
 }
 
 output "ap06_domain_netbios" {
-  description = "NetBIOS of AP06's domain (consumed by azrange.ps1 to qualify the EA credential)."
+  description = "NetBIOS of AP06's domain (consumed by aether.ps1 to qualify the EA credential)."
   value       = module.hybrid_ad.ap06_domain_netbios
 }
 
@@ -185,7 +185,7 @@ output "ap06_sync_account" {
 }
 
 output "ap06_sso_mode" {
-  description = "AP06 seeding mode (both / silver_ticket / sync_dcsync); consumed by azrange.ps1/verify.ps1."
+  description = "AP06 seeding mode (both / silver_ticket / sync_dcsync); consumed by aether.ps1/verify.ps1."
   value       = module.hybrid_ad.ap06_sso_mode
 }
 
@@ -278,7 +278,7 @@ output "ap08_mi_role" {
 }
 
 output "ap08_runbook_name" {
-  description = "Name of the embedded runbook (decoy azrange-ap08-maintenance). Null if runbook_mode='none' (pure misconfig)."
+  description = "Name of the embedded runbook (decoy aether-ap08-maintenance). Null if runbook_mode='none' (pure misconfig)."
   value       = module.azure_resources.ap08_runbook_name
 }
 

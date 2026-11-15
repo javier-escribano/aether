@@ -17,7 +17,7 @@ output "ap01_consent_url" {
     "https://login.microsoftonline.com/${var.tenant_domain}/oauth2/v2.0/authorize",
     "?client_id=${azuread_application.ap01[0].client_id}",
     "&response_type=code",
-    "&redirect_uri=https%3A%2F%2Flocalhost%2Fazrange-ap01",
+    "&redirect_uri=https%3A%2F%2Flocalhost%2Faether-ap01",
     "&response_mode=query",
     "&scope=offline_access%20Mail.Read%20Files.Read.All"
   ]) : null

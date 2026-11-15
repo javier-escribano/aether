@@ -2,7 +2,7 @@
 # Range base config
 # ------------------------------------------------------------------
 variable "tenant_domain" {
-  description = "TEST tenant domain (e.g. azrangelab.onmicrosoft.com). NEVER the corporate one."
+  description = "TEST tenant domain (e.g. aetherlab.onmicrosoft.com). NEVER the corporate one."
   type        = string
 
   validation {
@@ -14,7 +14,7 @@ variable "tenant_domain" {
 # ------------------------------------------------------------------
 # Tenant/subscription pin — safety guard against deploying to the WRONG place.
 # Both providers are pinned to these, so Terraform refuses to run against any
-# other tenant, and azrange.ps1 cross-checks the active `az` context before apply.
+# other tenant, and aether.ps1 cross-checks the active `az` context before apply.
 # Find them with:  az account show --query '{tenant:tenantId, sub:id}' -o json
 # ------------------------------------------------------------------
 variable "expected_tenant_id" {
@@ -41,7 +41,7 @@ variable "expected_subscription_id" {
 variable "lab_prefix" {
   description = "Prefix for naming range objects (makes teardown easier)."
   type        = string
-  default     = "azrange"
+  default     = "aether"
 }
 
 variable "user_count" {
@@ -111,7 +111,7 @@ variable "sso_account_name" {
 variable "sync_account_name" {
   description = "AP06 — sAMAccountName of the Entra Connect sync account with DCSync rights (analogous to MSOL_/Sync_)."
   type        = string
-  default     = "Sync_AZRANGE"
+  default     = "Sync_AETHER"
 }
 
 variable "sso_spns" {
@@ -233,7 +233,7 @@ variable "ap02_ssh_source_cidr" {
 variable "domain_fqdn" {
   description = "AP05 — FQDN of the throwaway forest. Do NOT sync with the tenant via real Entra Connect (that would turn the lab into a real risk; AP06 would cover that)."
   type        = string
-  default     = "azrange.lab"
+  default     = "aether.lab"
 }
 
 variable "vm_size" {

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Azure Attack Range orchestrator. Idempotent.
+    AETHER orchestrator. Idempotent.
 
 .DESCRIPTION
     Wraps Terraform plus the Graph seed scripts into a single flow.
@@ -13,9 +13,9 @@
     purge    : force-deletes lab resource groups by NAME (fallback when state is lost).
 
 .EXAMPLE
-    ./azrange.ps1 deploy
-    ./azrange.ps1 verify
-    ./azrange.ps1 destroy
+    ./aether.ps1 deploy
+    ./aether.ps1 verify
+    ./aether.ps1 destroy
 #>
 [CmdletBinding()]
 param(
@@ -81,11 +81,11 @@ function Assert-Prereqs {
     $script:ActiveTenantId = $acct.tenantId
 
     # --- Human gate: confirm the tenant even with -AutoApprove, unless the
-    #     AZRANGE_I_UNDERSTAND env var equals the expected tenant id (automation path). ---
-    $understood = ($expTenant -and $env:AZRANGE_I_UNDERSTAND -eq $expTenant)
+    #     AETHER_I_UNDERSTAND env var equals the expected tenant id (automation path). ---
+    $understood = ($expTenant -and $env:AETHER_I_UNDERSTAND -eq $expTenant)
     if (-not $understood) {
         Write-Warn "About to run '$Action' with INTENTIONALLY VULNERABLE resources in tenant '$domain'."
-        $typed = Read-Host "Type the tenant domain to confirm (or set AZRANGE_I_UNDERSTAND=<tenantId> to skip)"
+        $typed = Read-Host "Type the tenant domain to confirm (or set AETHER_I_UNDERSTAND=<tenantId> to skip)"
         if ($typed -ne $domain) { throw "Confirmation did not match ('$typed' != '$domain'). Aborting." }
     }
 }
@@ -121,7 +121,7 @@ function Invoke-ResidueCheck {
     # principals after reset/destroy (AP03/AP04 end with a runtime GA assignment
     # that lives in the directory, not in Terraform state). [SECURITY.md H-3]
     try {
-        $prefix = Get-TfvarValue 'lab_prefix'; if (-not $prefix) { $prefix = 'azrange' }
+        $prefix = Get-TfvarValue 'lab_prefix'; if (-not $prefix) { $prefix = 'aether' }
         $ra = az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?`$expand=principal" -o json 2>$null | ConvertFrom-Json
         $residual = @()
         foreach ($a in @($ra.value)) {
@@ -284,8 +284,8 @@ switch ($Action) {
             Write-Warn 'AP06 disabled: seed-ap06 is not run.'
         }
 
-        Write-Warn 'COST: auto-shutdown only DEALLOCATES the VMs; disks, public IPs and Log Analytics keep a small residual bill until you run ./azrange.ps1 destroy. Consider setting budget_monthly_amount in tfvars, and always destroy when done.'
-        Write-Step 'Deployment complete. Next: ./azrange.ps1 verify'
+        Write-Warn 'COST: auto-shutdown only DEALLOCATES the VMs; disks, public IPs and Log Analytics keep a small residual bill until you run ./aether.ps1 destroy. Consider setting budget_monthly_amount in tfvars, and always destroy when done.'
+        Write-Step 'Deployment complete. Next: ./aether.ps1 verify'
     }
 
     'reset' {
@@ -354,7 +354,7 @@ switch ($Action) {
         # Fallback teardown when the Terraform state is lost: force-delete lab
         # resource groups by NAME (prefix match), then flag Entra residue. [SECURITY.md L-6]
         Assert-Prereqs
-        $prefix = Get-TfvarValue 'lab_prefix'; if (-not $prefix) { $prefix = 'azrange' }
+        $prefix = Get-TfvarValue 'lab_prefix'; if (-not $prefix) { $prefix = 'aether' }
         Write-Warn "PURGE: force-deletes resource groups named '$prefix-*' (use only if 'destroy' cannot, e.g. lost state)."
         $rgs = az group list --query "[?starts_with(name, '$prefix-')].name" -o tsv 2>$null
         if ($rgs) {

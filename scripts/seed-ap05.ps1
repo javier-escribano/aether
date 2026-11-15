@@ -37,8 +37,8 @@ param(
     [string]$EaUser       = 'Administrator',
     [Parameter(Mandatory = $true)] [string]$EaPassword,
     [string]$LowPrivGroup = 'Domain Users',
-    [string]$TemplateName = 'AzRangeAuthESC1',
-    [string]$CaCommonName = 'azrange-CA',
+    [string]$TemplateName = 'AetherAuthESC1',
+    [string]$CaCommonName = 'aether-CA',
     [switch]$Remediate
 )
 
@@ -171,11 +171,11 @@ if (Get-TemplateObject) {
         'msPKI-Enrollment-Flag'               = 0
         # C5 CORE: ENROLLEE_SUPPLIES_SUBJECT (0x1) -> the requester sets the SAN.
         'msPKI-Certificate-Name-Flag'         = $CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT
-        'displayName'                         = 'AzRange Auth (ESC1)'
+        'displayName'                         = 'Aether Auth (ESC1)'
     }
 
     New-ADObject -Name $TemplateName -Type 'pKICertificateTemplate' -Path $templatesDN `
-        -DisplayName 'AzRange Auth (ESC1)' -OtherAttributes $attrs `
+        -DisplayName 'Aether Auth (ESC1)' -OtherAttributes $attrs `
         -Server $DomainFqdn -Credential $EA
 
     # C1: Enroll (+Autoenroll) ACE for the low-priv group.
@@ -214,10 +214,10 @@ Write-Host "`n[i] Attack path in docs/attack-paths/AP05-adcs-esc1.md" -Foregroun
 # ---------------------------------------------------------------------------
 # Documented ALTERNATIVE (the ADCSTemplate module from PSGallery; edits the
 # Configuration NC -> REQUIRES Enterprise Admin, -Publish publishes on ALL CAs):
-#   New-ADCSTemplate -DisplayName 'AzRange Auth (ESC1)' -Name AzRangeAuthESC1 `
-#       -JSON (Get-Content esc1.json -Raw) -Identity 'AZRANGE\Domain Users' -Publish
-#   Set-ADCSTemplateACL -DisplayName 'AzRange Auth (ESC1)' -Type Allow -Identity 'AZRANGE\Domain Users' -Enroll
-#   # Remediation: Remove-ADCSTemplate -DisplayName 'AzRange Auth (ESC1)'
+#   New-ADCSTemplate -DisplayName 'Aether Auth (ESC1)' -Name AetherAuthESC1 `
+#       -JSON (Get-Content esc1.json -Raw) -Identity 'AETHER\Domain Users' -Publish
+#   Set-ADCSTemplateACL -DisplayName 'Aether Auth (ESC1)' -Type Allow -Identity 'AETHER\Domain Users' -Enroll
+#   # Remediation: Remove-ADCSTemplate -DisplayName 'Aether Auth (ESC1)'
 # Pure ESC1 does NOT need EDITF_ATTRIBUTESUBJECTALTNAME2 on the CA (the SAN arrives
 # via ENROLLEE_SUPPLIES_SUBJECT; EDITF would be ESC6).
 # ---------------------------------------------------------------------------

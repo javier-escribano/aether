@@ -2,7 +2,7 @@ title: AP08 - Automation runbook authoring/execution and roleAssignments/write (
 id: a7d3f2b9-8c14-4e6a-b5f0-2d9c1e4a7b63
 status: experimental
 description: |
-  Detects the MANAGEMENT PLANE of the AP08 chain of Azure Attack Range. An Automation Account with
+  Detects the MANAGEMENT PLANE of the AP08 chain of AETHER. An Automation Account with
   an OVER-PRIVILEGED system-assigned Managed Identity (User Access Administrator or Owner on its
   RG, both carrying Microsoft.Authorization/roleAssignments/write) is driven by a LOW-privilege
   principal with Automation Contributor. The low-priv user authors and PUBLISHES a runbook
@@ -29,7 +29,7 @@ references:
   - https://attack.mitre.org/techniques/T1078/004/
   - https://learn.microsoft.com/en-us/azure/automation/enable-managed-identity-for-automation
   - https://learn.microsoft.com/en-us/azure/automation/automation-manage-send-joblogs-log-analytics
-author: Azure Attack Range
+author: AETHER
 date: 2026-11-15
 logsource:
   product: azure

@@ -1,14 +1,14 @@
 # Copy to terraform.tfvars and edit. terraform.tfvars is in .gitignore (not versioned).
 
-tenant_domain = "azrangelab.onmicrosoft.com"   # <-- YOUR TEST tenant
+tenant_domain = "aetherlab.onmicrosoft.com"   # <-- YOUR TEST tenant
 
-# Safety pin: Terraform refuses to deploy anywhere else, and azrange.ps1 verifies
+# Safety pin: Terraform refuses to deploy anywhere else, and aether.ps1 verifies
 # the active az session matches. Find them with:
 #   az account show --query '{tenant:tenantId, sub:id}' -o json
 expected_tenant_id = "00000000-0000-0000-0000-000000000000" # <-- YOUR TEST tenant id (GUID), REQUIRED
 # expected_subscription_id = "00000000-0000-0000-0000-000000000000"  # <-- TEST subscription id; leave commented for identity-only (AP01/03/04)
 
-lab_prefix = "azrange"
+lab_prefix = "aether"
 user_count = 5
 
 # Azure region for AP02/AP05/AP07/AP08 (only used if enable_ap02, enable_ap05, enable_ap07, or enable_ap08):
@@ -26,7 +26,7 @@ location = "westeurope"
 enable_ap01 = true
 
 # AP02 deploys VM + Key Vault + storage: BILLS compute.
-# Enable it only in a test tenant/subscription and run `azrange.ps1 destroy` when done.
+# Enable it only in a test tenant/subscription and run `aether.ps1 destroy` when done.
 enable_ap02 = false
 # AP02 SSH is open to the Internet by design (initial-access lesson). To lock it to you:
 # ap02_ssh_source_cidr = "203.0.113.10/32"
@@ -45,7 +45,7 @@ enable_ap04 = false
 # AP05 (hybrid): AD CS ESC1 over a Windows Server 2022 DC on Azure IaaS.
 # COST WARNING! It's the MOST EXPENSIVE AP: a Windows VM powered on 24/7 (mitigated by
 # daily auto-shutdown). Enable it only in a test subscription and run
-# `./azrange.ps1 destroy` (or enable_ap05=false) when done.
+# `./aether.ps1 destroy` (or enable_ap05=false) when done.
 enable_ap05 = false
 
 # AP06 (hybrid): Entra Connect / Seamless SSO (AZUREADSSOACC$). On-prem→cloud
@@ -65,7 +65,7 @@ sso_mode = "both"
 
 # Account names (optional; realistic defaults):
 # sso_account_name  = "AZUREADSSOACC"
-# sync_account_name = "Sync_AZRANGE"
+# sync_account_name = "Sync_AETHER"
 
 # AP07 (Azure, ~zero cost, NO VM): storage with anonymous access → leaked blob
 # with an over-scoped credential → exfil of the private container. It's "the cheap one":
@@ -140,7 +140,7 @@ collect_automation_logs = true
 # Leave it empty/undefined → the module generates a random_password. NEVER a real password.
 # dc_admin_password = null
 
-domain_fqdn = "azrange.lab"
+domain_fqdn = "aether.lab"
 
 # vm_size = "Standard_B2ms"   # "Standard_B2s" as the cheaper floor.
 

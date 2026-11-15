@@ -26,10 +26,10 @@
 // signal is the 'Add member to group' (self-add) and, upstream/downstream,
 // the role assignment to the group and the final self-grant of Global Admin.
 //
-// Author: Azure Attack Range   Date: 2026-11-14
+// Author: AETHER   Date: 2026-11-14
 // =====================================================================
 
-let lab_prefix      = "azrange";                             // = var.lab_prefix
+let lab_prefix      = "aether";                             // = var.lab_prefix
 let role_group_name = strcat(lab_prefix, "-ap03-role-admins");// role-assignable group (loot: carries PRA)
 let role_group_id   = "";                                     // optional: objectId of the group (ap03_group_object_id) for high fidelity
 let priv_roles      = dynamic([                              // Tier-0 directory roles relevant to the chain

@@ -12,7 +12,7 @@ variable "enable_ap05" {
 variable "lab_prefix" {
   description = "Prefix for naming the range objects (eases teardown)."
   type        = string
-  default     = "azrange"
+  default     = "aether"
 }
 
 variable "location" {
@@ -36,13 +36,13 @@ variable "dc_admin_password" {
 variable "domain_fqdn" {
   description = "FQDN of the throwaway forest (NEVER synchronize with the tenant via real Entra Connect: that is covered by AP06)."
   type        = string
-  default     = "azrange.lab"
+  default     = "aether.lab"
 }
 
 variable "domain_netbios" {
   description = "NetBIOS name of the domain. Used to qualify the EA credential (DOMAIN\\Administrator) in the seed and in the CA."
   type        = string
-  default     = "AZRANGE"
+  default     = "AETHER"
 }
 
 variable "vm_size" {
@@ -83,13 +83,13 @@ variable "lowpriv_user_name" {
 variable "ca_common_name" {
   description = "Common Name of the Enterprise Root CA."
   type        = string
-  default     = "azrange-CA"
+  default     = "aether-CA"
 }
 
 variable "esc1_template_name" {
   description = "Name (cn) of the vulnerable ESC1 template seeded by seed-ap05.ps1. Must match the detections (CertificateTemplate)."
   type        = string
-  default     = "AzRangeAuthESC1"
+  default     = "AetherAuthESC1"
 }
 
 variable "collect_security_events" {
@@ -162,7 +162,7 @@ variable "sso_account_name" {
 variable "sync_account_name" {
   description = "AP06 - sAMAccountName of the Entra Connect synchronization account with DCSync rights (analogous to MSOL_/Sync_)."
   type        = string
-  default     = "Sync_AZRANGE"
+  default     = "Sync_AETHER"
 }
 
 variable "sso_spns" {
