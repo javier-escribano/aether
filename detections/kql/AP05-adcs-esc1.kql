@@ -1,0 +1,200 @@
+// =====================================================================
+// AP05 — AD CS ESC1 (Enrollee-Supplies-Subject) en DC hibrido
+//        Cadena: un usuario de BAJO privilegio (CAELUM\ap05user) enrola la
+//        honeytemplate 'CaelumAuthESC1' especificando SAN = UPN de un Domain
+//        Admin  ->  autentica ese certificado via PKINIT  ->  obtiene un TGT
+//        como el DA  ->  DCSync.
+//
+// Fuente: eventos de SEGURIDAD de Windows del DC/CA (on-prem en Azure IaaS),
+//         ingeridos en Log Analytics / Sentinel via Azure Monitor Agent (AMA)
+//         + Data Collection Rule.  Tabla: SecurityEvent.
+//         AP05 es on-prem: NO hay logs cloud de Entra (AuditLogs/SigninLogs).
+//
+// MITRE:  T1649     (Steal or Forge Authentication Certificates: ADCS) [NUCLEO]
+//         T1550     (Use Alternate Authentication Material: PKINIT con el cert forjado)
+//         T1003.006 (OS Credential Dumping: DCSync — objetivo final de la cadena)
+//
+// EVENTOS (Windows Security):
+//   4886  Certificate Services recibio una solicitud de certificado
+//   4887  Certificate Services aprobo una solicitud y EMITIO un certificado
+//   4899  Una plantilla de Certificate Services fue ACTUALIZADA
+//   4900  La SEGURIDAD de una plantilla de Certificate Services fue actualizada
+//   4768  Se solicito un TGT Kerberos (via PKINIT porta Certificate Information)
+//
+// PRERREQUISITO DE AUDITORIA  (lo habilita la BASE DSC, no el seed, para que
+// persista entre ciclos seed/-Remediate; SIN esto NO se generan los eventos y
+// la deteccion dispara en vacio):
+//   CA  : certutil -setreg CA\AuditFilter 127 ; Restart-Service certsvc
+//         auditpol /set /subcategory:"Certification Services" /success:enable /failure:enable
+//   KDC : auditpol /set /subcategory:"Kerberos Authentication Service" /success:enable
+//
+// CAVEATS DEL ESQUEMA REAL DE SecurityEvent (verificado contra la referencia de
+// tablas de Azure Monitor):
+//   * El nombre de PLANTILLA de 4886/4887 NO es una columna dedicada: en builds
+//     < Windows Server 2025 viaja dentro de la columna 'Attributes' (linea
+//     "CertificateTemplate:<cn|oid>"); WS2025 anade un campo renderizado propio.
+//     Se busca en 'Attributes' y, de respaldo, en el XML crudo de 'EventData'.
+//   * El SAN forjado (UPN del DA) NO viaja fiable en 4886/4887: vive en la CA DB
+//     (certutil -view / -db). Por eso la regla NO exige requester!=SAN como gate;
+//     enrolar la honeytemplate ES sospechoso de por si (leccion de AP04: correlar
+//     con OR, nunca un AND global que descarte en silencio una rama).
+//   * SecurityEvent NO promueve a columna CertThumbprint / CertSerialNumber /
+//     CertIssuerName / PreAuthType (esas columnas son de AADDomainServicesAccountLogon,
+//     NO de SecurityEvent): en 4768 se EXTRAEN del XML de 'EventData'.
+//   * 4768 es ALTO VOLUMEN (todo TGT del dominio) -> se acota a PKINIT
+//     (PreAuthType = 16, PA-PK-AS-REQ / Certificate Information poblada) para
+//     limitar ruido y coste de ingesta.
+//
+// COMPLEMENTO: Microsoft Defender for Identity trae deteccion ESC1 nativa
+//              (forja / solicitud sospechosa de certificado). Usar en paralelo.
+//
+// Autor: Caelum Range   Fecha: 2026-11-14
+// =====================================================================
+
+let esc1_template = "CaelumAuthESC1";   // = var.esc1_template_name  (output ap05_esc1_template_name)
+let lookback      = 1d;
+let corr_window   = 10m;                // ventana emision(4887) -> PKINIT(4768) para la SALIDA 2
+
+// ---------------------------------------------------------------------
+// SENAL A — T1649: solicitud (4886) y EMISION (4887) de un certificado sobre
+//           la honeytemplate ESC1. Enrolar 'CaelumAuthESC1' NO deberia ocurrir
+//           jamas en operacion normal -> cada hit es sospechoso por si solo.
+//           'Requester' = cuenta solicitante (esperado: CAELUM\ap05user, low-priv).
+//           'Subject'   = DN del subject (el SAN = UPN del DA NO viaja fiable aqui).
+// ---------------------------------------------------------------------
+let SignalA_enroll =
+    SecurityEvent
+    | where TimeGenerated > ago(lookback)
+    | where EventID in (4886, 4887)
+    | where Attributes has esc1_template or EventData has esc1_template
+    | project TimeGenerated,
+              Signal   = "A-enroll-esc1",
+              Stage    = iff(EventID == 4887,
+                             "T1649 — cert EMITIDO sobre honeytemplate ESC1 (4887)",
+                             "T1649 — solicitud de cert sobre honeytemplate ESC1 (4886)"),
+              EventID,
+              Actor    = Requester,
+              Host     = Computer,
+              RequestId,
+              Subject,
+              Attributes,
+              Disposition;
+
+// ---------------------------------------------------------------------
+// SENAL B — seeding / manipulacion de la plantilla: 4899 (plantilla
+//           actualizada) + 4900 (seguridad de plantilla actualizada). El propio
+//           sembrado de 'CaelumAuthESC1' por seed-ap05 genera estos eventos: el
+//           defensor VE plantarse la vuln (punto didactico). Tambien dispara con
+//           la remediacion (-Remediate limpia los flags / despublica).
+//           'SubjectUserName' = cuenta que modifico la plantilla (esperado: EA).
+// ---------------------------------------------------------------------
+let SignalB_tmplchange =
+    SecurityEvent
+    | where TimeGenerated > ago(lookback)
+    | where EventID in (4899, 4900)
+    | project TimeGenerated,
+              Signal   = "B-template-change",
+              Stage    = iff(EventID == 4900,
+                             "T1649 — SEGURIDAD de plantilla AD CS modificada (4900)",
+                             "T1649 — plantilla AD CS actualizada (4899)"),
+              EventID,
+              Actor    = SubjectUserName,
+              Host     = Computer,
+              Attributes,
+              EventData;
+
+// ---------------------------------------------------------------------
+// SENAL C — T1550: TGT Kerberos (4768) emitido via PKINIT = autenticacion con
+//           el certificado forjado. SecurityEvent no promueve los campos de
+//           Certificate Information -> se extraen del XML de 'EventData'.
+//           PKINIT  =>  PreAuthType 16 (PA-PK-AS-REQ)  Y/O  CertThumbprint /
+//           CertSerialNumber no vacios. Se filtra con OR (no AND) para no perder
+//           la rama si el pipeline no serializa alguno de los campos.
+//           NOTA: si tu DCR/AMA serializa EventData en otra forma, ajusta los
+//           regex contra un evento 4768 PKINIT real del DC.
+// ---------------------------------------------------------------------
+let SignalC_pkinit =
+    SecurityEvent
+    | where TimeGenerated > ago(lookback)
+    | where EventID == 4768
+    | extend PreAuthType    = extract(@'Name="PreAuthType">\s*([^<]*?)\s*<', 1, EventData)
+    | extend CertThumbprint = extract(@'Name="CertThumbprint">\s*([^<]*?)\s*<', 1, EventData)
+    | extend CertSerial     = extract(@'Name="CertSerialNumber">\s*([^<]*?)\s*<', 1, EventData)
+    | extend CertIssuer     = extract(@'Name="CertIssuerName">\s*([^<]*?)\s*<', 1, EventData)
+    | where PreAuthType == "16" or isnotempty(CertThumbprint)
+    | project TimeGenerated,
+              Signal   = "C-pkinit-tgt",
+              Stage    = "T1550 — TGT via PKINIT (auth con cert forjado)",
+              EventID,
+              Actor    = TargetUserName,
+              Host     = Computer,
+              SourceIp = ClientAddress,
+              ServiceName,
+              PreAuthType,
+              CertThumbprint,
+              CertSerial,
+              CertIssuer,
+              Status;
+
+// =====================================================================
+// SALIDA 1 — Timeline unificado de las 3 senales AP05 (independientes).
+// Triage de la cadena completa (rompe):
+//   SENAL B (seeding de la plantilla)  ->  SENAL A (4887: emision sobre ESC1
+//   por el enrollee low-priv)  ->  SENAL C (4768 PKINIT para una cuenta DISTINTA
+//   y privilegiada = el DA forjado).  Cada senal dispara POR SI SOLA (union, no AND).
+// =====================================================================
+union isfuzzy=true SignalA_enroll, SignalB_tmplchange, SignalC_pkinit
+| sort by TimeGenerated asc
+
+
+// =====================================================================
+// SALIDA 2 (alta fidelidad) — Correlacion emision -> PKINIT.
+// 4887 sobre la honeytemplate ESC1 (enrollee low-priv)  ==>  dentro de
+// corr_window, un 4768 PKINIT cuyo TargetUserName es DISTINTO del enrollee
+// (= el DA suplantado por el SAN forjado). La huella del cert emitido NO viaja
+// en 4887 (solo SubjectKeyIdentifier), asi que la correlacion es TEMPORAL + por
+// host + divergencia de cuenta, NO un join por thumbprint (la huella solo esta
+// en la CA DB). Casi cero FP: es justo el pivote que la remediacion (-Remediate /
+// quitar ENROLLEE_SUPPLIES_SUBJECT) hace imposible. Descomentar para alertar.
+// =====================================================================
+// let issued_esc1 =
+//     SecurityEvent
+//     | where TimeGenerated > ago(lookback)
+//     | where EventID == 4887
+//     | where Attributes has esc1_template or EventData has esc1_template
+//     | extend EnrolleeSam = tolower(tostring(split(Requester, "\\")[-1]))
+//     | project IssueTime = TimeGenerated, Host = Computer, Enrollee = Requester, EnrolleeSam;
+// let pkinit_tgt =
+//     SecurityEvent
+//     | where TimeGenerated > ago(lookback)
+//     | where EventID == 4768
+//     | extend PreAuthType    = extract(@'Name="PreAuthType">\s*([^<]*?)\s*<', 1, EventData)
+//     | extend CertThumbprint = extract(@'Name="CertThumbprint">\s*([^<]*?)\s*<', 1, EventData)
+//     | where PreAuthType == "16" or isnotempty(CertThumbprint)
+//     | extend PkinitSam = tolower(trim_end(@"\$", tostring(TargetUserName)))
+//     | project PkinitTime = TimeGenerated, Host = Computer, PkinitUser = TargetUserName,
+//               PkinitSam, PkinitIp = ClientAddress, CertThumbprint;
+// issued_esc1
+// | join kind=inner pkinit_tgt on Host
+// | where PkinitTime between (IssueTime .. (IssueTime + corr_window))
+// | where PkinitSam != EnrolleeSam
+// | project IssueTime, Enrollee, PkinitTime, PkinitUser, PkinitIp, CertThumbprint,
+//           Alerta = "AP05 ESC1: emision low-priv sobre honeytemplate -> PKINIT como cuenta distinta (DA forjado)"
+// | sort by IssueTime asc
+
+
+// ---------------------------------------------------------------------
+// COMPLEMENTO (fuera de SecurityEvent) — KB5014754 strong certificate mapping.
+// Tras el parche, si el SID del solicitante (szOID_NTDS_CA_SECURITY_EXT) NO
+// coincide con el SID del subject, el KDC escribe en el canal SYSTEM (proveedor
+// Microsoft-Windows-Kerberos-Key-Distribution-Center):
+//    39  — el KDC encontro un certificado valido pero el SID no coincide
+//    41  — el certificado y el SID del usuario no coinciden (strong mapping)
+// NO estan en SecurityEvent (son del log System). Si el DCR tambien recoge
+// "System!*[System[(EventID=39 or EventID=41)]]" aterrizan en la tabla Event /
+// WindowsEvent. Senal de ALTA fidelidad del forge ESC1 incluso cuando Full
+// Enforcement YA bloquea el logon (la pata Detecta dispara aunque Rompe falle).
+// ---------------------------------------------------------------------
+// Event
+// | where Source has "Kerberos-Key-Distribution-Center" and EventID in (39, 41)
+// | sort by TimeGenerated asc

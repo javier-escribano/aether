@@ -1,0 +1,44 @@
+# === Terraform ===
+# NUNCA comitees estado ni secretos: contienen credenciales del range en claro.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+
+# Artefacto del paquete DSC de AP05 (archive_file lo regenera en cada plan/apply).
+CaelumDC.zip
+.dsc-build/
+
+# Variables reales (solo se versiona el .example)
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# === Secretos / credenciales ===
+*.pem
+*.key
+*.pfx
+*.p12
+*.publishsettings
+azureauth.json
+sp-credentials.json
+.env
+.env.*
+
+# === PowerShell / salida de scripts ===
+*.clixml
+seed-output-*.json
+verify-report-*.json
+
+# === Sistema ===
+.DS_Store
+Thumbs.db
+*.log

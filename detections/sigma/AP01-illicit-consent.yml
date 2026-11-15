@@ -1,0 +1,42 @@
+title: Illicit OAuth Consent Grant to High-Value Graph Scopes (Caelum AP01)
+id: 7b3f1a2e-6c94-4d51-9a2b-0a1b2c3d4e5f
+status: experimental
+description: >
+  Detecta un consentimiento (de usuario o delegado) a una aplicación que obtiene
+  permisos de Microsoft Graph de alto valor (lectura de correo/ficheros + offline_access),
+  patrón del consent phishing / illicit consent grant.
+references:
+  - https://attack.mitre.org/techniques/T1528/
+  - https://learn.microsoft.com/en-us/defender-cloud-apps/investigate-risky-oauth
+author: Caelum Range
+date: 2026-11-14
+logsource:
+  product: azure
+  service: auditlogs
+detection:
+  selection_op:
+    OperationName:
+      - 'Consent to application'
+      - 'Add delegated permission grant'
+  selection_scopes:
+    ModifiedProperties|contains:
+      - 'Mail.Read'
+      - 'Mail.ReadWrite'
+      - 'Files.Read.All'
+      - 'Files.ReadWrite.All'
+      - 'offline_access'
+      - 'Directory.Read.All'
+  condition: selection_op and selection_scopes
+fields:
+  - InitiatedBy
+  - TargetResources
+  - ModifiedProperties
+falsepositives:
+  - Consentimiento de admin a aplicaciones corporativas aprobadas
+  - Integraciones legítimas de correo/almacenamiento (revisar publisher verificado)
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1528
+  - attack.persistence
+  - attack.t1098.003

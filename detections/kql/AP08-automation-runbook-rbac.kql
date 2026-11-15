@@ -1,0 +1,320 @@
+// =====================================================================
+// AP08 - Automation Account runbook -> escalada RBAC
+//        (ejecucion en el PLANO DE GESTION de Azure via un runbook que corre
+//         COMO la system-assigned Managed Identity sobre-privilegiada del
+//         Automation Account)
+// -----------------------------------------------------------------
+//   CADENA (rompe):
+//     1. AUTORIA: un principal con Automation Contributor sobre el RG crea/importa y
+//        PUBLICA un runbook PowerShell en el Automation Account.
+//          runbooks/write + runbooks/draft/content/write + runbooks/publish/action  [T1651 precursor]
+//        (en el lab esto lo hace el apply de Terraform = la "gun cargada"; el defensor
+//         VE plantarse el arma, paralelo a 4899/4900 de AP05 y a storageAccounts/write de AP07.)
+//     2. EJECUCION: el mismo low-priv LANZA un job del runbook (Start-AzAutomationRunbook).
+//          jobs/write                                                               [T1651 - Cloud Administration Command]
+//        (Terraform NUNCA lanza el job: jobs/write solo aparece cuando el ALUMNO dispara el "rompe".)
+//     3. El job corre COMO la MI (Connect-AzAccount -Identity). Como la MI ostenta User
+//        Access Administrator u Owner SOBRE EL RG (ambos incluyen
+//        Microsoft.Authorization/roleAssignments/write), el runbook ejecuta
+//        New-AzRoleAssignment y se AUTO-CONCEDE Owner del RG al atacante low-priv.
+//          roleAssignments/write con Caller == objectId de la MI                     [T1098.003 - SENAL DE ORO]
+//     4. PERSISTENCIA: el low-priv es ahora Owner del RG (control total + standing).  [T1078.004]
+//
+//   El ACTOR efectivo de la escalada es la MI del Automation Account (paridad con AP02,
+//   donde el actor es la MI robada via IMDS): el confused deputy es "quien puede LANZAR
+//   un runbook actua con el scope de la MI".
+//
+//   Fuentes (tablas REALES en Log Analytics / Sentinel):
+//     - AzureActivity    (plano de GESTION; fluye al SIEM sin provisionar NADA -como en
+//                         AP02/AP07-): autoria del runbook, lanzamiento del job
+//                         (jobs/write = T1651) y el roleAssignments/write POR la MI.
+//     - AzureDiagnostics (plano de DATOS del Automation Account; ResourceProvider ==
+//                         'MICROSOFT.AUTOMATION', Category in ('JobLogs','JobStreams').
+//                         Automation NO tiene tabla dedicada -> el diagnostic setting SIN
+//                         log_analytics_destination_type aterriza en AzureDiagnostics, NO en
+//                         una tabla Dedicated como el 'StorageBlobLogs' de AP07).
+//
+//   MITRE:  T1651     (Cloud Administration Command)                 [NUCLEO - ejecutar via runbook]
+//           T1098.003 (Account Manipulation: Additional Cloud Roles) (el self-grant de Owner)
+//           T1078.004 (Valid Accounts: Cloud Accounts)               (persistencia como Owner del RG)
+//
+//   REPARTO Sigma / KQL (declarado EXPLICITO, como AP02 'el AuditEvent del KV no es
+//     activitylogs' y AP07 'StorageBlobLogs no es logsource Sigma'):
+//       * El PLANO DE GESTION (AzureActivity: autoria + jobs/write + roleAssignments/write)
+//         tiene regla Sigma companera (AP08-automation-runbook-rbac.yml).
+//       * PERO la SENAL DE ORO -roleAssignments/write con Caller == la MI- depende de un
+//         objectId que VARIA por despliegue: una regla Sigma estatica no lo puede fijar. Ese
+//         estrechamiento (Caller==MI) es KQL-primary (parametro mi_principal_id, abajo).
+//       * El PLANO DE DATOS (JobLogs/JobStreams: la ejecucion + el texto New-AzRoleAssignment
+//         en los streams) NO es un logsource Sigma estandar -> KQL-primary (ESTE fichero).
+//
+//   CAVEATS del esquema/telemetria (como el bloque KB5014754 de AP05 / StorageBlobLogs de AP07):
+//     * JobLogs/JobStreams NO estan activos por defecto -> sin el diagnostic setting sobre el
+//       Automation Account, la EJECUCION del runbook NO existe en NINGUN SIEM (espejo exacto de
+//       AP07 'sin el diagnostic de blobServices/default no hay logs' y de AP05 'sin AuditFilter
+//       no hay 4886/4887'). El plano de GESTION (jobs/write, roleAssignments/write) SI fluye sin
+//       provisionar nada.
+//     * DISCRIMINADOR deploy-vs-ataque (la clave de la SENAL DE ORO): en el APPLY del lab el grant
+//       MI->rol (azurerm_role_assignment) lo ejecuta el DEPLOYER -> Caller == identidad de Terraform.
+//       En el ATAQUE el self-grant lo ejecuta la MI -> Caller == objectId de la MI. Filtrar Caller==MI
+//       deja fuera el grant de despliegue y aisla la escalada de runtime.
+//     * El BENEFICIARIO del roleAssignments/write (el objectId que recibe Owner) NO se serializa de
+//       forma fiable en AzureActivity (el requestbody no viaja completo) -> se EXTRAE como PISTA
+//       tolerante de Properties y, con alta fidelidad, de los JobStreams (ResultDescription); NUNCA
+//       gatea la fila (OR-no-AND, leccion de AP04/AP07: no dropear la cadena).
+//     * El nombre del Automation Account lleva sufijo random -> este KQL ancla en el RG FIJO
+//       ('caelum-ap08-rg') y en el runbook SENUELO FIJO ('caelum-ap08-maintenance'); rellena
+//       mi_principal_id con el output ap08_mi_principal_id para activar el filtro de oro.
+//     * Si tu DCR/pipeline serializa los campos de Automation (RunbookName_s, JobId_g,
+//       StreamType_s, ResultDescription) de otra forma, ajusta contra una fila real
+//       AzureDiagnostics | where ResourceProvider == 'MICROSOFT.AUTOMATION'.
+//
+//   COMPLEMENTO gestionado: Microsoft Defender for Cloud (role assignment anomalo) + Azure Policy
+//     (denegar Owner/UAA a identidades de automation) + PIM (sin standing Owner/UAA). Usar en paralelo.
+//
+//   Autor: Caelum Range   Fecha: 2026-11-15
+// =====================================================================
+
+let lookback         = 1d;
+let corr_window      = 20m;                        // ventana job-launch -> MI-grant (SALIDA 2)
+let rg_name          = "caelum-ap08-rg";           // = ${lab_prefix}-ap08-rg (output ap08_resource_group); "" = cualquier RG
+let runbook_name     = "caelum-ap08-maintenance";  // = output ap08_runbook_name (senuelo fijo); "" = cualquier runbook
+let mi_principal_id  = "";                          // = output ap08_mi_principal_id (objectId de la system-assigned MI).
+                                                    //   RELLENAR: es el filtro de ORO (Caller==MI). "" = NO filtra (triage
+                                                    //   mas amplio sobre todos los roleAssignments/write del RG; OR-no-AND).
+
+// ---------------------------------------------------------------------
+// SENAL A - T1651 (precursor), plano de GESTION: AUTORIA del runbook. Crear/actualizar
+//   el runbook, escribir su draft content y PUBLICARLO. En el lab lo dispara el apply de
+//   Terraform (la gun cargada): el defensor VE plantarse el arma. Caller = el deployer (en
+//   el apply) o el low-priv autor (si autora a mano). Por si solo NO es ataque -> contexto.
+// ---------------------------------------------------------------------
+let SignalA_authoring =
+    AzureActivity
+    | where TimeGenerated > ago(lookback)
+    | where OperationNameValue in~ (
+          "MICROSOFT.AUTOMATION/AUTOMATIONACCOUNTS/RUNBOOKS/WRITE",
+          "MICROSOFT.AUTOMATION/AUTOMATIONACCOUNTS/RUNBOOKS/DRAFT/CONTENT/WRITE",
+          "MICROSOFT.AUTOMATION/AUTOMATIONACCOUNTS/RUNBOOKS/PUBLISH/ACTION")
+    | where rg_name == "" or ResourceGroup =~ rg_name
+    | where ActivityStatusValue in~ ("Success", "Accept", "Start")
+    | extend Stage = case(
+          OperationNameValue has "PUBLISH",        "T1651 (precursor) - runbook PUBLICADO (draft -> published; la gun cargada)",
+          OperationNameValue has "DRAFT/CONTENT",  "T1651 (precursor) - contenido de runbook escrito (autoria del payload)",
+                                                   "T1651 (precursor) - runbook creado/actualizado")
+    | project TimeGenerated,
+              Signal   = "A-authoring",
+              Stage,
+              Plane    = "mgmt",
+              OperationName = OperationNameValue,
+              Caller,                         // deployer (apply) o low-priv autor
+              CallerIp = CallerIpAddress,
+              ResourceGroup,
+              Resource = _ResourceId,
+              Status   = ActivityStatusValue;
+
+// ---------------------------------------------------------------------
+// SENAL B - T1651 (nucleo), plano de GESTION: EJECUCION. Lanzamiento de un job del runbook
+//   (jobs/write). Terraform NUNCA lo dispara -> jobs/write aparece SOLO cuando el ALUMNO
+//   ejecuta el "rompe" (Start-AzAutomationRunbook). El JobId se extrae del _ResourceId para
+//   poder cruzarlo con los JobStreams (data-plane) en la SALIDA 2. LauncherIsMI se ANOTA
+//   (no filtra): en el ataque el lanzador es el low-priv, no la MI.
+// ---------------------------------------------------------------------
+let SignalB_jobexec =
+    AzureActivity
+    | where TimeGenerated > ago(lookback)
+    | where OperationNameValue =~ "MICROSOFT.AUTOMATION/AUTOMATIONACCOUNTS/JOBS/WRITE"
+    | where rg_name == "" or ResourceGroup =~ rg_name
+    | where ActivityStatusValue in~ ("Success", "Accept", "Start")
+    | extend JobId = tolower(extract(@'(?i)/jobs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 1, tostring(_ResourceId)))
+    | extend LauncherIsMI = mi_principal_id != "" and Caller =~ mi_principal_id
+    | project TimeGenerated,
+              Signal   = "B-job-exec",
+              Stage    = "T1651 - job de runbook lanzado (ejecucion = el rompe imperativo del alumno)",
+              Plane    = "mgmt",
+              OperationName = OperationNameValue,
+              Caller,                         // el low-priv que conduce la MI
+              CallerIp = CallerIpAddress,
+              ResourceGroup,
+              Resource = _ResourceId,
+              JobId,
+              LauncherIsMI,
+              Status   = ActivityStatusValue;
+
+// ---------------------------------------------------------------------
+// SENAL C - T1098.003 (SENAL DE ORO), plano de GESTION: roleAssignments/write cuyo Caller ES
+//   la MI del Automation Account. Un role assignment ejecutado POR una identidad de automation
+//   es altisima senal (ninguna automation deberia repartir RBAC). Si mi_principal_id esta fijado
+//   se filtra a Caller==MI (alta fidelidad y deja fuera el grant de DESPLIEGUE, cuyo Caller es el
+//   deployer). Si esta vacio NO se descarta la fila: se emiten TODOS los roleAssignments/write del
+//   RG con GrantByAutomationMI como anotacion para que el analista triage (OR-no-AND, AP04/AP07).
+//   El BENEFICIARIO (objectId que recibe Owner) se intenta extraer de Properties como PISTA; no
+//   gatea (el requestbody no viaja fiable -> se confirma via JobStreams en la SALIDA 2).
+// ---------------------------------------------------------------------
+let SignalC_mi_grant =
+    AzureActivity
+    | where TimeGenerated > ago(lookback)
+    | where OperationNameValue =~ "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE"
+    | where rg_name == "" or ResourceGroup =~ rg_name
+    | where ActivityStatusValue in~ ("Success", "Accept", "Start")
+    | where mi_principal_id == "" or Caller =~ mi_principal_id
+    | extend GrantByAutomationMI = mi_principal_id != "" and Caller =~ mi_principal_id
+    | extend BeneficiaryHint = tolower(extract(@'(?i)principalid"?\s*[:=]\s*"?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 1, tostring(Properties)))
+    | extend Stage = iff(GrantByAutomationMI,
+          "T1098.003 - roleAssignments/write POR la MI de Automation (senal de oro: escalada RBAC auto-concedida)",
+          "T1098.003 - roleAssignments/write en el RG AP08 (triage: confirmar si el Caller es la MI de Automation)")
+    | project TimeGenerated,
+              Signal   = "C-mi-roleassign",
+              Stage,
+              Plane    = "mgmt",
+              OperationName = OperationNameValue,
+              Caller,                         // objectId de la MI (oro) o el principal que concede
+              CallerIp = CallerIpAddress,
+              ResourceGroup,
+              Resource = _ResourceId,
+              GrantByAutomationMI,
+              BeneficiaryHint,
+              Status   = ActivityStatusValue;
+
+// ---------------------------------------------------------------------
+// SENAL D - T1651 / T1098.003, plano de DATOS (AzureDiagnostics, Automation). JobLogs =
+//   cambios de estado del job; JobStreams = los streams de salida. Con log_verbose=true y la
+//   salida NO suprimida, ResultDescription revela el literal New-AzRoleAssignment / 'Owner' del
+//   "rompe" (data-plane OPORTUNISTA; un atacante sigiloso lo suprimiria con | Out-Null -> por eso
+//   la pata de ORO vive en el control-plane INSUPRIMIBLE de SignalC). Los campos _s/_g de Automation
+//   se leen con column_ifexists para que la consulta sea portable a workspaces sin logs de Automation.
+//   RECUERDA: SIN el diagnostic setting del Automation Account esta tabla esta VACIA para AP08.
+// ---------------------------------------------------------------------
+let SignalD_jobdata =
+    AzureDiagnostics
+    | where TimeGenerated > ago(lookback)
+    | where ResourceProvider == "MICROSOFT.AUTOMATION"
+    | where Category in ("JobLogs", "JobStreams")
+    | extend RunbookName = tostring(column_ifexists("RunbookName_s", ""))
+    | extend JobId       = tolower(tostring(column_ifexists("JobId_g", "")))
+    | extend StreamType  = tostring(column_ifexists("StreamType_s", ""))
+    | where runbook_name == "" or RunbookName =~ runbook_name
+    | where rg_name == "" or _ResourceId has rg_name
+    | extend RoleAssignmentTextHit = Category == "JobStreams"
+             and ResultDescription has_any ("New-AzRoleAssignment", "roleAssignment", "RoleDefinitionName", "Owner")
+    | extend Stage = case(
+          RoleAssignmentTextHit,     "T1651/T1098.003 - stream del job revela texto de role assignment (New-AzRoleAssignment/Owner)",
+          Category == "JobStreams",  "T1651 - stream de salida del job de runbook (data-plane)",
+                                     "T1651 - cambio de estado del job de runbook (JobLogs)")
+    | project TimeGenerated,
+              Signal   = "D-job-dataplane",
+              Stage,
+              Plane    = "data",
+              OperationName = Category,
+              ResourceGroup = toupper(tostring(split(tostring(_ResourceId), "/")[4])),  // toupper: uniforma con AzureActivity.ResourceGroup (uppercase) en el timeline union
+              Resource = _ResourceId,
+              RunbookName,
+              JobId,
+              StreamType,
+              JobStatus = ResultType,
+              RoleAssignmentTextHit,
+              ResultDescription;
+
+// =====================================================================
+// SALIDA 1 - Timeline unificado de las 4 senales AP08 (independientes; union = OR).
+// Triage de la cadena completa (rompe):
+//   SENAL A (autoria + PUBLICACION del runbook = la gun cargada por el apply)  ->  SENAL B
+//   (jobs/write = el alumno LANZA el job, T1651)  ->  SENAL C (roleAssignments/write POR la MI
+//   = el self-grant de Owner, la senal de oro)  ->  SENAL D (JobStreams revela el texto
+//   New-AzRoleAssignment, si el diagnostic esta activo). Cada senal dispara POR SI SOLA (isfuzzy
+//   soporta los esquemas heterogeneos mgmt/data y las tablas ausentes; NUNCA un AND global que
+//   descarte una rama cuando falta un plano -leccion de AP04/AP07-).
+// =====================================================================
+union isfuzzy=true SignalA_authoring, SignalB_jobexec, SignalC_mi_grant, SignalD_jobdata
+| sort by TimeGenerated asc
+
+
+// =====================================================================
+// SALIDA 2 (alta fidelidad) - Correlacion de la CADENA: job-launch (low-priv) -> MI-grant (la MI).
+// El NUCLEO es un INNER join de DOS eventos de control-plane que SIEMPRE fluyen a AzureActivity y
+// que son AMBOS imprescindibles en la cadena:
+//   (a) jobs/write cuyo Caller NO es la MI (el low-priv que lanza el runbook)                [T1651]
+//   (b) roleAssignments/write cuyo Caller ES la MI, en el MISMO RG, dentro de corr_window        [T1098.003]
+//       tras (a).
+// Casi cero FP: es justo el pivote que la remediacion (quitar UAA/Owner a la MI) hace imposible.
+// El inner join entre (a) y (b) es CORRECTO -NO es el bug de AP07- porque ambos links son
+// OBLIGATORIOS y ambos eventos de gestion fluyen sin provisionar nada. Lo OPCIONAL (el beneficiario
+// via JobStreams, que requiere el diagnostic setting OFF por defecto) va con LEFTOUTER y se ANOTA,
+// NUNCA gatea: si el data-plane esta apagado la cadena SIGUE disparando por RG+tiempo (leccion de
+// AP04/AP07: no dropear la cadena). El fan-out del leftouter se colapsa con summarize. La correlacion
+// es por RG+TIEMPO, NO por el beneficiario (que no serializa fiable en AzureActivity); el beneficiario
+// solo se ANOTA, y BeneficiaryIsLauncher=true (el low-priv que lanzo el job ES quien recibe Owner) es
+// el smoking gun. Descomentar para alertar.
+// =====================================================================
+// let job_launch =
+//     AzureActivity
+//     | where TimeGenerated > ago(lookback)
+//     | where OperationNameValue =~ "MICROSOFT.AUTOMATION/AUTOMATIONACCOUNTS/JOBS/WRITE"
+//     | where ActivityStatusValue in~ ("Success", "Accept", "Start")
+//     | where rg_name == "" or ResourceGroup =~ rg_name
+//     | where mi_principal_id == "" or Caller != mi_principal_id    // el lanzador es el low-priv, NO la MI
+//     | extend JobId = tolower(extract(@'(?i)/jobs/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 1, tostring(_ResourceId)))
+//     | project JobLaunchTime = TimeGenerated, Launcher = Caller, LauncherIp = CallerIpAddress,
+//               ResourceGroup, JobId;
+// let mi_grant =
+//     AzureActivity
+//     | where TimeGenerated > ago(lookback)
+//     | where OperationNameValue =~ "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE"
+//     | where ActivityStatusValue in~ ("Success", "Accept", "Start")
+//     | where rg_name == "" or ResourceGroup =~ rg_name
+//     | where mi_principal_id == "" or Caller =~ mi_principal_id    // el grant lo ejecuta la MI (SENAL DE ORO)
+//     | extend GrantBeneficiaryHint = tolower(extract(@'(?i)principalid"?\s*[:=]\s*"?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 1, tostring(Properties)))
+//     | project GrantTime = TimeGenerated, Grantor = Caller, GrantorIp = CallerIpAddress,
+//               ResourceGroup, GrantResourceId = _ResourceId, GrantBeneficiaryHint;
+// let stream_benef =
+//     AzureDiagnostics
+//     | where TimeGenerated > ago(lookback)
+//     | where ResourceProvider == "MICROSOFT.AUTOMATION" and Category == "JobStreams"
+//     | extend JobId = tolower(tostring(column_ifexists("JobId_g", "")))
+//     | extend RoleTextHit = ResultDescription has_any ("New-AzRoleAssignment", "roleAssignment", "RoleDefinitionName", "Owner")
+//     | extend StreamBeneficiary = tolower(extract(@'(?i)principal[^0-9a-f]{0,6}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 1, ResultDescription))
+//     | summarize RoleTextHits      = countif(RoleTextHit),
+//                 StreamBeneficiary = take_anyif(StreamBeneficiary, isnotempty(StreamBeneficiary)),
+//                 SampleStream      = take_anyif(ResultDescription, RoleTextHit)
+//              by JobId;
+// job_launch
+// | join kind=inner mi_grant on ResourceGroup
+// | where GrantTime between (JobLaunchTime .. (JobLaunchTime + corr_window))
+// // el beneficiario (data-plane) es OPCIONAL -> leftouter + anotacion, NUNCA gate (si el
+// // diagnostic esta OFF, StreamBeneficiary viene vacio y la cadena SIGUE disparando):
+// | join kind=leftouter stream_benef on JobId
+// | extend BeneficiaryIsLauncher = isnotempty(StreamBeneficiary) and StreamBeneficiary =~ Launcher
+// // colapsa el fan-out del leftouter a UNA alerta por (RG, job, grant):
+// | summarize JobLaunchTime         = min(JobLaunchTime),
+//             Launcher              = take_any(Launcher),
+//             LauncherIp            = take_any(LauncherIp),
+//             GrantTime             = min(GrantTime),
+//             Grantor               = take_any(Grantor),
+//             RoleTextHits          = take_any(RoleTextHits),
+//             StreamBeneficiary     = take_any(StreamBeneficiary),
+//             GrantBeneficiaryHint  = take_any(GrantBeneficiaryHint),
+//             BeneficiaryIsLauncher = take_any(BeneficiaryIsLauncher)
+//          by ResourceGroup, JobId, GrantResourceId
+// | project JobLaunchTime, Launcher, LauncherIp, GrantTime, Grantor, ResourceGroup, JobId,
+//           GrantResourceId, StreamBeneficiary, GrantBeneficiaryHint, BeneficiaryIsLauncher, RoleTextHits,
+//           Alerta = "AP08: job de runbook lanzado por low-priv -> roleAssignments/write por la MI en el mismo RG dentro de corr_window = escalada RBAC via Automation (BeneficiaryIsLauncher=true si el stream confirma que el beneficiario es el MISMO low-priv que lanzo el job)"
+// | sort by GrantTime asc
+
+
+// ---------------------------------------------------------------------
+// COMPLEMENTO (plano de gestion, alta fidelidad) - CUALQUIER roleAssignments/write cuyo Caller
+// sea una MI de Automation = escalada por un deputy de automation. Un role assignment ejecutado
+// POR una identidad de Automation Account es, por si solo, altisima senal (ninguna automation
+// deberia repartir RBAC). Rellena automation_mi_oids con los objectId de las MIs de tus Automation
+// Accounts (output ap08_mi_principal_id para el del lab) y alerta. Independiente del RG y del
+// runbook: caza la primitiva en toda la subscription. Descomentar.
+// ---------------------------------------------------------------------
+// let automation_mi_oids = dynamic([]);   // objectIds de system-assigned MIs de Automation Accounts
+// AzureActivity
+// | where TimeGenerated > ago(lookback)
+// | where OperationNameValue =~ "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE"
+// | where ActivityStatusValue in~ ("Success", "Accept", "Start")
+// | where Caller in~ (automation_mi_oids)
+// | project TimeGenerated, Caller, CallerIpAddress, ResourceGroup, _ResourceId,
+//           Alerta = "AP08: roleAssignments/write ejecutado por la MI de un Automation Account (escalada RBAC via runbook)"
+// | sort by TimeGenerated asc

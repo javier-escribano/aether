@@ -1,0 +1,271 @@
+// =====================================================================
+// AP07 - Public Storage / SAS leak  (exfiltracion en el PLANO DE ALMACENAMIENTO de Azure)
+// -----------------------------------------------------------------
+//   CADENA (rompe):
+//     1. Enumeracion ANONIMA del contenedor publico 'public'
+//        (GET .../public?restype=container&comp=list  ->  OperationName ListBlobs)   [T1619]
+//     2. Descarga ANONIMA de 'backup-config.json' (GET .../public/backup-config.json
+//        ->  OperationName GetBlob) que filtra una credencial SOBRE-PERMISIONADA:
+//        una SAS de cuenta de larga vida (leak_mode=sas) o la clave de cuenta
+//        (leak_mode=account_key) hacia el contenedor privado 'sensitive-data'.      [T1530 + T1552.001]
+//     3. PIVOTE autenticado: la credencial lee 'sensitive-data/customers.csv'
+//        (CAELUM{ap07_public_blob_to_sas_to_private_exfil}) y exfiltra la joya.      [T1530]
+//
+//   Fuentes (tablas REALES en Log Analytics / Sentinel):
+//     - StorageBlobLogs  (plano de DATOS del blob; tabla resource-specific que produce
+//                         el diagnostic setting sobre '<cuenta>/blobServices/default'
+//                         con log_analytics_destination_type = "Dedicated". Sin
+//                         "Dedicated" los logs caen en AzureDiagnostics legacy y las
+//                         columnas cambian de nombre).
+//     - AzureActivity    (plano de GESTION; fluye al SIEM sin provisionar nada -como
+//                         en AP02-): captura el MISCONFIG y el listKeys.
+//
+//   MITRE:  T1530     (Data from Cloud Storage)                       [NUCLEO]
+//           T1619     (Cloud Storage Object Discovery)                (ListBlobs anonimo)
+//           T1552.001 (Unsecured Credentials: Credentials In Files)   (SAS/clave en el blob)
+//
+//   REPARTO Sigma / KQL (declarado EXPLICITO, como AP02 'el AuditEvent del KV no es
+//     activitylogs' y AP05 'el SAN no viaja en 4886/4887'): el PLANO DE DATOS
+//     (StorageBlobLogs: acceso anonimo + pivote SAS/clave) NO es un logsource Sigma
+//     estandar -> es KQL-primary (ESTE fichero). El PLANO DE GESTION (AzureActivity:
+//     misconfig + listKeys) SI tiene regla Sigma companera (AP07-public-storage-leak.yml).
+//
+//   CAVEATS del esquema/telemetria (como el bloque KB5014754 de AP05):
+//     * StorageBlobLogs NO esta activo por defecto -> sin el diagnostic setting sobre
+//       blobServices/default, el acceso anonimo/SAS NO existe en NINGUN SIEM. El plano
+//       de GESTION (AzureActivity) SI fluye sin provisionar nada (como el misconfig de AP02).
+//     * Los PERMISOS y la FIRMA de la SAS NO se registran: ves AuthenticationType=='SAS'
+//       y desde que CallerIpAddress / hacia que objeto, pero NO cual SAS ni su scope (vive
+//       en la firma, no en el log) -> correlacion por IP/tiempo/objeto, NUNCA por el
+//       contenido de la SAS (espejo exacto de 'el SAN no viaja en 4886/4887' de AP05).
+//     * 'SAS' (de cuenta) y 'AccountKey' se firman AMBAS con la shared key -> son justo lo
+//       que mata la remediacion shared_access_key_enabled=false. 'OAuth' (Entra RBAC) y
+//       'DelegationSAS' (user-delegation SAS) son las formas REMEDIADAS -> NO se marcan como
+//       pivote a proposito (bajan FP y ensenan el antidoto least-privilege).
+//     * El propio DESPLIEGUE del lab genera el misconfig en AzureActivity
+//       (storageAccounts/write con allowBlobPublicAccess=true + listKeys para leer la
+//       connection string de la SAS): el defensor VE plantarse la vuln (paralelo a 4899/4900 de AP05).
+//     * El contenedor del lab (azurerm_storage_container) se crea por el PLANO DE DATOS
+//       (REST API de Blob), NO por ARM -> el apply del lab NO emite el evento
+//       'blobServices/containers/write' en AzureActivity (SENAL C rama CONTAINERS). La
+//       telemetria de DESPLIEGUE la aportan storageAccounts/write (allowBlobPublicAccess=true)
+//       + listKeys; la rama CONTAINERS/WRITE solo dispara si alguien crea/cambia el contenedor
+//       via portal/CLI/ARM/azapi (flip de acceso publico por un admin o atacante), NO en el lab.
+//     * El nombre de cuenta lleva sufijo random -> este KQL ancla en los nombres de
+//       contenedor FIJOS ('public' / 'sensitive-data') y en el blob filtrado
+//       ('backup-config.json'); fija 'account_name' al output ap07_storage_account si
+//       quieres acotar a una sola cuenta. Si tu pipeline serializa los campos de otra
+//       forma, ajusta contra una fila StorageBlobLogs real.
+//
+//   COMPLEMENTO gestionado: Microsoft Defender for Storage (deteccion nativa de acceso
+//     anonimo inusual y de exfiltracion). Usar en paralelo.
+//
+//   Autor: Caelum Range   Fecha: 2026-11-15
+// =====================================================================
+
+let lookback          = 1d;
+let corr_window       = 30m;                   // ventana de la cadena anonymous -> SAS/Key (SALIDA 2)
+let public_container  = "public";              // contenedor publico (container_access_type = "container")
+let private_container = "sensitive-data";      // contenedor privado (la joya)
+let leaked_blob       = "backup-config.json";  // artefacto filtrado con la credencial (SAS/clave)
+let jewel_blob        = "customers.csv";       // la joya exfiltrada
+let account_name      = "";                    // opcional: fijar al output ap07_storage_account para acotar; "" = cualquier cuenta
+// 'SAS' (de cuenta) y 'AccountKey' = firmadas con la shared key = la superficie que mata
+// shared_access_key_enabled=false. NO incluimos 'OAuth' (Entra RBAC) ni 'DelegationSAS'
+// (user-delegation SAS): son las formas REMEDIADAS. Se listan variantes de grafia por
+// robustez del pipeline (OR, no AND; leccion de AP04 de no descartar una rama en silencio).
+let shared_key_auth   = dynamic(["SAS", "AccountKey", "Account Key"]);
+
+// ---------------------------------------------------------------------
+// SENAL A - T1619 / T1530 (plano de datos): acceso ANONIMO al blob storage.
+//   AuthenticationType == "Anonymous" con una operacion de lectura/descubrimiento:
+//     ListBlobs             = el '?restype=container&comp=list' (enumeracion, paso 1)   [T1619]
+//     GetBlob               = la descarga de backup-config.json (la credencial, paso 2) [T1530]
+//     GetContainerProperties / GetBlobProperties = sondeo previo.
+//   El acceso anonimo NO deberia ocurrir en operacion normal -> cada hit es sospechoso
+//   por si solo (la SENAL DE ORO). NO se gatea por contenedor ni por exito: un intento
+//   anonimo FALLIDO (403/404) contra 'sensitive-data' tambien es recon valioso
+//   (OR-no-AND; se EXPONE StatusCode para que el analista separe exito de sondeo).
+// ---------------------------------------------------------------------
+let SignalA_anon =
+    StorageBlobLogs
+    | where TimeGenerated > ago(lookback)
+    | where account_name == "" or AccountName =~ account_name
+    | where AuthenticationType =~ "Anonymous"
+    | where OperationName in~ ("ListBlobs", "GetBlob", "GetBlobProperties", "GetContainerProperties")
+    | extend LeakedConfigHit = (Uri has leaked_blob or ObjectKey has leaked_blob)      // descarga de la credencial
+    | extend TargetContainer = tostring(split(tostring(ObjectKey), "/")[2])            // ObjectKey = /cuenta/contenedor/blob
+    | extend Stage = case(
+          OperationName == "ListBlobs",  "T1619 - enumeracion ANONIMA (ListBlobs = restype=container&comp=list)",
+          LeakedConfigHit,               "T1530 - descarga ANONIMA de backup-config.json (la credencial filtrada)",
+          "T1530 - lectura/sondeo ANONIMO de blob")
+    | project TimeGenerated,
+              Signal   = "A-anon-access",
+              Stage,
+              Plane    = "data",
+              OperationName,
+              AuthType = AuthenticationType,
+              CallerIp = CallerIpAddress,
+              Account  = AccountName,
+              TargetContainer,
+              Target   = Uri,
+              StatusCode,
+              LeakedConfigHit;
+
+// ---------------------------------------------------------------------
+// SENAL B - T1530 (plano de datos): PIVOTE con la credencial filtrada contra el
+//   contenedor PRIVADO 'sensitive-data'. AuthenticationType firmado con la shared key
+//   ('SAS' de cuenta o 'AccountKey') leyendo 'sensitive-data' = uso de la credencial
+//   robada (paso 3). Se ancla el objeto por Uri OR ObjectKey (no se exige ambos: OR-no-AND).
+//   OJO: 'OAuth' / 'DelegationSAS' leyendo 'sensitive-data' serian el acceso REMEDIADO
+//   (Entra RBAC / user-delegation SAS) -> deliberadamente FUERA de esta senal; por eso
+//   RequesterObjectId (identidad Entra) viene VACIO aqui y corrobora que NO es RBAC.
+// ---------------------------------------------------------------------
+let SignalB_pivot =
+    StorageBlobLogs
+    | where TimeGenerated > ago(lookback)
+    | where account_name == "" or AccountName =~ account_name
+    | where AuthenticationType in~ (shared_key_auth)
+    | where Uri has private_container or ObjectKey has private_container
+    | extend JewelHit = (Uri has jewel_blob or ObjectKey has jewel_blob)
+    | extend Stage = iff(JewelHit,
+          "T1530 - pivote con credencial filtrada: lectura de customers.csv (la joya) en sensitive-data",
+          "T1530 - pivote con credencial filtrada sobre el contenedor privado sensitive-data")
+    | project TimeGenerated,
+              Signal    = "B-sas-key-pivot",
+              Stage,
+              Plane     = "data",
+              OperationName,
+              AuthType  = AuthenticationType,
+              CallerIp  = CallerIpAddress,
+              Account   = AccountName,
+              Requester = RequesterObjectId,     // vacio para SAS/clave (no hay identidad Entra) -> NO es Entra RBAC
+              Target    = Uri,
+              StatusCode,
+              JewelHit;
+
+// ---------------------------------------------------------------------
+// SENAL C - plano de GESTION (AzureActivity): el MISCONFIG y la recuperacion de clave.
+//   storageAccounts/write           -> posible allowBlobPublicAccess=true (puerta de CUENTA)
+//   blobServices/containers/write   -> posible publicAccess=blob|container (puerta de CONTENEDOR;
+//                                      'container' ademas habilita el LIST anonimo = T1619)
+//   storageAccounts/listKeys/action -> recuperacion de la shared key (leak_mode=account_key / robo)
+//   El VALOR del misconfig (allowBlobPublicAccess=true, publicAccess=container) NO siempre
+//   se serializa en AzureActivity (el cuerpo de la peticion no viaja fiable) -> se keyea en la
+//   OPERACION y se ENRIQUECE con un string search tolerante sobre Properties (pista, NO gate:
+//   OR-no-AND). El propio despliegue del lab dispara aqui -> el defensor VE plantarse la vuln.
+// ---------------------------------------------------------------------
+let SignalC_mgmt =
+    AzureActivity
+    | where TimeGenerated > ago(lookback)
+    | where OperationNameValue in~ (
+          "MICROSOFT.STORAGE/STORAGEACCOUNTS/WRITE",                      // misconfig de cuenta (allowBlobPublicAccess)
+          "MICROSOFT.STORAGE/STORAGEACCOUNTS/LISTKEYS/ACTION",            // recuperacion de la shared key
+          "MICROSOFT.STORAGE/STORAGEACCOUNTS/BLOBSERVICES/CONTAINERS/WRITE") // misconfig de contenedor (publicAccess)
+    | where account_name == "" or _ResourceId has account_name
+    | where ActivityStatusValue in~ ("Success", "Accept", "Start")       // valores reales del esquema moderno de AzureActivity
+    | extend Stage = case(
+          OperationNameValue has "LISTKEYS",   "T1552.001 - recuperacion de la shared key (listKeys = control total del plano de datos)",
+          OperationNameValue has "CONTAINERS", "misconfig - contenedor via ARM (posible publicAccess=blob|container)",
+          "misconfig - storage account write (posible allowBlobPublicAccess=true)")
+    // pista de acceso publico (NO filtra la fila: el valor puede no viajar en AzureActivity)
+    | extend PublicAccessHint = tostring(Properties) has_any ("allowBlobPublicAccess", "publicAccess", "AllowBlobPublicAccess")
+    | project TimeGenerated,
+              Signal   = "C-mgmt-misconfig",
+              Stage,
+              Plane    = "mgmt",
+              OperationName = OperationNameValue,
+              Caller,                         // principal que actua (objectId / UPN)
+              CallerIp = CallerIpAddress,
+              ResourceGroup,
+              _ResourceId,
+              ActivityStatusValue,
+              PublicAccessHint;
+
+// =====================================================================
+// SALIDA 1 - Timeline unificado de las 3 senales AP07 (independientes; union = OR).
+// Triage de la cadena completa (rompe):
+//   SENAL C (misconfig: la cuenta/contenedor se abren + listKeys)  ->  SENAL A (ListBlobs
+//   anonimo = descubrimiento  ->  GetBlob anonimo de backup-config.json = robo de la
+//   credencial)  ->  SENAL B (SAS/clave leyendo sensitive-data = exfil de la joya).
+//   Cada senal dispara POR SI SOLA (isfuzzy soporta los esquemas heterogeneos data/mgmt;
+//   nunca un AND global que descarte una rama cuando falta un plano -leccion de AP04-).
+// =====================================================================
+union isfuzzy=true SignalA_anon, SignalB_pivot, SignalC_mgmt
+| sort by TimeGenerated asc
+
+
+// =====================================================================
+// SALIDA 2 (alta fidelidad) - Correlacion de la CADENA public->private por CallerIpAddress.
+// La MISMA IP cliente hace, dentro de corr_window:
+//   (opcional) ListBlobs anonimo  ->  GetBlob anonimo de backup-config.json  ->
+//   lectura con SAS/clave de 'sensitive-data'.
+// El NUCLEO es anon-get(credencial) -> cred-get(joya): casi cero FP, es justo el pivote
+// que la remediacion (cerrar el acceso publico / shared_access_key_enabled=false) hace
+// imposible. La lista previa (ListBlobs) se une con LEFTOUTER y se ANOTA en PrecededByList:
+// la cadena NO se descarta si la lista falta O cae FUERA de ventana -el atacante pudo adivinar
+// el blob con container_access_type="blob" SIN listar- (OR-no-AND, leccion de AP04; el fan-out
+// del leftouter se colapsa con summarize para no duplicar la alerta). CallerIpAddress trae
+// "ip:puerto" -> se normaliza a la IP para que los puertos efimeros no rompan el join.
+// Descomentar para alertar.
+// =====================================================================
+// let anon_list =
+//     StorageBlobLogs
+//     | where TimeGenerated > ago(lookback)
+//     | where account_name == "" or AccountName =~ account_name
+//     | where AuthenticationType =~ "Anonymous" and OperationName in~ ("ListBlobs", "GetContainerProperties")
+//     | extend ClientIp = tostring(split(CallerIpAddress, ":")[0])
+//     | project ListTime = TimeGenerated, ClientIp, ListUri = Uri;
+// let anon_get =
+//     StorageBlobLogs
+//     | where TimeGenerated > ago(lookback)
+//     | where account_name == "" or AccountName =~ account_name
+//     | where AuthenticationType =~ "Anonymous" and OperationName in~ ("GetBlob", "GetBlobProperties")
+//     | where Uri has leaked_blob or ObjectKey has leaked_blob
+//     | extend ClientIp = tostring(split(CallerIpAddress, ":")[0])
+//     | project GetTime = TimeGenerated, ClientIp, GetUri = Uri;
+// let cred_get =
+//     StorageBlobLogs
+//     | where TimeGenerated > ago(lookback)
+//     | where account_name == "" or AccountName =~ account_name
+//     | where AuthenticationType in~ (shared_key_auth)
+//     | where Uri has private_container or ObjectKey has private_container
+//     | extend ClientIp = tostring(split(CallerIpAddress, ":")[0])
+//     | project PivotTime = TimeGenerated, ClientIp, PivotAuth = AuthenticationType, PivotUri = Uri;
+// anon_get
+// | join kind=inner cred_get on ClientIp
+// | where PivotTime between (GetTime .. (GetTime + corr_window))
+// // NUCLEO (alta fidelidad): anon-get(backup-config.json) -> cred-get(sensitive-data) desde la
+// // MISMA IP dentro de corr_window. NUNCA se descarta: es el pivote que la remediacion mata.
+// | join kind=leftouter anon_list on ClientIp
+// // La lista previa (ListBlobs) es OPCIONAL -> se ANOTA, NO se filtra. Un ListBlobs de la MISMA
+// // IP FUERA de ventana (o ausente) NO debe tirar el nucleo. El leftouter puede multiplicar la
+// // fila por cada ListBlobs -> se colapsa con summarize por la identidad del nucleo.
+// | extend ListedInWindow = isnotempty(ListUri) and ListTime between (GetTime - corr_window .. GetTime)
+// | summarize ListTime = maxif(ListTime, ListedInWindow),
+//             ListUri  = take_anyif(ListUri, ListedInWindow),
+//             InWindowListCount = countif(ListedInWindow)
+//         by ClientIp, GetTime, GetUri, PivotTime, PivotAuth, PivotUri
+// | extend PrecededByList = InWindowListCount > 0
+// | project ClientIp, PrecededByList, ListTime, ListUri, GetTime, GetUri, PivotTime, PivotAuth, PivotUri,
+//           Alerta = "AP07: anonymous-get(backup-config.json) -> SAS/Key-get(sensitive-data) desde la MISMA IP = cadena public->private (PrecededByList=true si hubo ListBlobs anonimo previo en ventana)"
+// | sort by GetTime asc
+
+
+// ---------------------------------------------------------------------
+// COMPLEMENTO (plano de gestion, alta fidelidad) - listKeys sobre la cuenta AP07 por un
+// principal INESPERADO = recuperacion de la clave de control total (leak_mode=account_key
+// o robo de clave). Acotar por Caller a una allowlist de automatizacion/IaC conocida
+// convierte esto en una regla de baja FP (el propio Terraform del lab hace listKeys al
+// desplegar). Descomentar y rellenar la allowlist.
+// ---------------------------------------------------------------------
+// let known_automation = dynamic([]);   // objectIds / UPNs de IaC/operadores esperados
+// AzureActivity
+// | where TimeGenerated > ago(lookback)
+// | where OperationNameValue =~ "MICROSOFT.STORAGE/STORAGEACCOUNTS/LISTKEYS/ACTION"
+// | where ActivityStatusValue in~ ("Success", "Accept", "Start")
+// | where account_name == "" or _ResourceId has account_name
+// | where Caller !in~ (known_automation)
+// | project TimeGenerated, Caller, CallerIpAddress, _ResourceId,
+//           Alerta = "AP07: listKeys sobre la cuenta por principal no allowlisted (recuperacion de shared key)"
+// | sort by TimeGenerated asc

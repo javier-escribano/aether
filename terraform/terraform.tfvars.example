@@ -1,0 +1,129 @@
+# Copia a terraform.tfvars y edita. terraform.tfvars está en .gitignore (no se versiona).
+
+tenant_domain = "caelumlab.onmicrosoft.com"   # <-- TU tenant de TEST
+lab_prefix    = "caelum"
+user_count    = 5
+
+# Región Azure para AP02/AP05/AP07/AP08 (solo se usa si enable_ap02, enable_ap05, enable_ap07 o enable_ap08):
+location = "westeurope"
+
+# --- Rutas de ataque activas ---
+# Recomendado para el primer despliegue: solo AP01 (identidad, sin coste).
+enable_ap01 = true
+
+# AP02 despliega VM + Key Vault + storage: FACTURA cómputo.
+# Actívalo solo en tenant/subscription de test y haz `caelum.ps1 destroy` al terminar.
+enable_ap02 = false
+
+# AP03 (identidad): owner de bajo privilegio sobre grupo role-assignable → PRA → Global Admin.
+# Coste $ ~0 pero REQUIERE Entra ID P1 (grupos role-assignable), NO Entra Free puro.
+# El principal que hace `apply` debe tener Privileged Role Administrator o Global Administrator.
+enable_ap03 = false
+
+# AP04 (identidad): owner de bajo privilegio sobre app registration cuyo SP porta RoleManagement.ReadWrite.Directory
+# (admin-consented). El owner añade un client secret → token app-only del SP → self-asigna Global Admin.
+# Coste $ ~0 (Entra Free). El principal que hace `apply` debe tener Global Administrator o Privileged Role Administrator
+# para conceder el admin-consent del permiso de aplicación de Graph.
+enable_ap04 = false
+
+# AP05 (híbrido): AD CS ESC1 sobre un DC Windows Server 2022 en Azure IaaS.
+# ¡OJO COSTE! Es el AP MÁS CARO: una VM Windows encendida 24/7 (mitigado por
+# auto-shutdown diario). Actívalo solo en subscription de test y haz
+# `./caelum.ps1 destroy` (o enable_ap05=false) al terminar.
+enable_ap05 = false
+
+# AP06 (híbrido): Entra Connect / Seamless SSO (AZUREADSSOACC$). Puente
+# on-prem→cloud, 2ª ruta híbrida y la que CIERRA el catálogo. REUSA el DC de
+# AP05 (substrato compartido vía need_dc): si enable_ap05=true, AP06 NO añade
+# VM; si AP05 está off, AP06 levanta el DC él solo (FACTURA CÓMPUTO como AP05).
+# Secretos (sso/sync/EA) ATERRIZAN EN EL ESTADO (sensibles, como dc_admin_password).
+# reset = enable_ap06=false (+ enable_ap05=false para destruir el DC). Arregla
+# in-place (AP06-off con AP05-on, el DC sobrevive): seed-ap06.ps1 -Remediate.
+enable_ap06 = false
+
+# Artefactos a sembrar (solo relevante si enable_ap06 = true):
+#   "both"          → cadena completa sync→DCSync→AZUREADSSOACC$→silver ticket→nube (default).
+#   "silver_ticket" → solo AZUREADSSOACC$ con clave fija/no-rotada + SPNs.
+#   "sync_dcsync"   → solo la cuenta de sync con ACEs DCSync sobre el NC.
+sso_mode = "both"
+
+# Nombres de cuenta (opcional; defaults realistas):
+# sso_account_name  = "AZUREADSSOACC"
+# sync_account_name = "Sync_CAELUM"
+
+# AP07 (Azure, coste ~0, SIN VM): storage con acceso anónimo → blob filtrado
+# con credencial over-scoped → exfil del contenedor privado. Es "la barata":
+# solo storage + unos KB de blobs + ingesta mínima de logs (céntimos/mes).
+# 100% declarativo (sin seed). reset = enable_ap07=false → destroy atómico.
+# ¡OJO!: la SAS/clave filtrada ATERRIZA EN EL ESTADO de Terraform (sensible,
+# como dc_admin_password de AP05). Trata el tfstate como tóxico; ya está en
+# .gitignore. Actívalo solo en subscription de TEST.
+enable_ap07 = false
+
+# Modo de la credencial filtrada (solo relevante si enable_ap07 = true):
+#   "sas"         → SAS de cuenta over-scoped (default; lección least-privilege).
+#   "account_key" → primary_access_key (control total, más severa).
+leak_mode = "sas"
+
+# Telemetría AP07 (StorageBlobLogs vía diagnostic setting → Log Analytics).
+# true = 'Detecta' testeable end-to-end (ingesta « 0,1 GB/día). false = sin
+# ingesta (coste cero; asume SIEM externo). Reutiliza
+# existing_log_analytics_workspace_id (abajo) para no crear un LAW propio.
+collect_storage_logs = true
+
+# AP08 (Azure, coste ~0, SIN VM): Automation Account con system-assigned MI
+# over-privilegiada (UAA/Owner sobre el RG) + atacante low-priv (Automation
+# Contributor) → un runbook que corre COMO la MI se auto-concede Owner del RG.
+# 100% declarativo (sin seed): deploy = solo apply. La 'gun' queda cargada
+# (runbook publicado) pero Terraform NUNCA lanza un job; el "rompe"
+# (Start-AzAutomationRunbook) es acción del alumno. reset = enable_ap08=false →
+# destroy atómico del RG (y con él toda role assignment de runtime RG-scoped).
+# ¡OJO!: el password del atacante ATERRIZA EN EL ESTADO (sensible, como
+# dc_admin_password de AP05). Trata el tfstate como tóxico; ya está en .gitignore.
+# Actívalo solo en subscription de TEST.
+enable_ap08 = false
+
+# Runbook incrustado (solo relevante si enable_ap08 = true):
+#   "poc_escalation" → gun cargada: el runbook concede Owner del RG al atacante
+#                      (demo inmediata; default). Riesgo acotado por RG-scope +
+#                      Terraform nunca lo dispara.
+#   "benign_probe"   → el runbook SOLO prueba identidad/poder de la MI; el alumno
+#                      escribe la escalada (más seguro para despliegues compartidos).
+#   "none"           → sin runbook incrustado; misconfig pura (el alumno autora todo).
+runbook_mode = "poc_escalation"
+
+# Rol over-priv de la MI SOBRE EL RG (solo relevante si enable_ap08 = true):
+#   "UserAccessAdministrator" → mínimo-que-escala (su único poder es asignar
+#                               roles; lección más afilada; default).
+#   "Owner"                   → más realista/común en tenants reales.
+# (Contributor NO vale: no incluye roleAssignments/write.)
+mi_role = "UserAccessAdministrator"
+
+# Telemetría AP08 (JobLogs + JobStreams vía diagnostic setting → Log Analytics,
+# tabla AzureDiagnostics). true = 'Detecta' testeable end-to-end (ingesta mínima).
+# false = sin ingesta (coste cero; asume SIEM externo). Estas categorías NO están
+# activas por defecto → sin este setting la EJECUCIÓN del runbook no existe en el
+# SIEM (el plano de gestión SÍ fluye por AzureActivity). Reutiliza
+# existing_log_analytics_workspace_id (abajo) para no crear un LAW propio.
+collect_automation_logs = true
+
+# --- Config de AP05 (solo se usa si enable_ap05 = true) ---
+# TU IP pública /32 para RDP/WinRM al DC. NUNCA 0.0.0.0/0 (un DC no se expone a
+# Internet). Déjalo sin definir (null) para no abrir ningún puerto (Bastion/serial).
+# admin_source_cidr = "203.0.113.10/32"
+
+# Password del Administrator de dominio (= EA que siembra/remedia ESC1).
+# Déjalo vacío/sin definir → el módulo genera un random_password. NUNCA una password real.
+# dc_admin_password = null
+
+domain_fqdn = "caelum.lab"
+
+# vm_size = "Standard_B2ms"   # "Standard_B2s" como suelo más barato.
+
+# Telemetría de detección (AMA+DCR+Log Analytics). true = 'Detecta' testeable
+# end-to-end (feed de 1 DC filtrado a 5 EventID « 0,1-0,3 GB/día). false = sin
+# ingesta (coste cero; asume SIEM externo).
+collect_security_events = true
+
+# Para apuntar el DCR a un Sentinel/Log Analytics EXISTENTE (y no crear uno propio):
+# existing_log_analytics_workspace_id = "/subscriptions/.../resourceGroups/.../providers/Microsoft.OperationalInsights/workspaces/..."

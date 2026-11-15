@@ -1,0 +1,106 @@
+title: AP06 - Entra Connect / Seamless SSO (AZUREADSSOACC$) - DCSync de la cuenta de sync, extraccion de claves y silver ticket (puente on-prem->cloud)
+id: b6e1d4c7-3a92-4f85-9c2e-1f7a6b3d8e40
+status: experimental
+description: |
+  Detecta la cadena AP06 de Caelum Range sobre el DC hibrido compartido con AP05
+  (on-prem en Azure IaaS). La cuenta de sincronizacion de Entra Connect
+  (CAELUM\Sync_CAELUM, sembrada con derechos DCSync) hace DCSync (4662 + GUID de
+  replicacion) para extraer las claves Kerberos de la cuenta de maquina
+  AZUREADSSOACC$; con ellas se FORJA un SILVER TICKET para el SPN
+  HTTP/autologon.microsoftazuread-sso.com suplantando a cualquier usuario
+  sincronizado, y se autentica a la NUBE como ese usuario SIN su password (T1550)
+  -> el compromiso on-prem SALTA a Entra ID. Debilidad estrella (vs AP05, que
+  termina en DCSync on-prem): la password de AZUREADSSOACC$ NUNCA se rota por
+  defecto -> su hash robado vale para siempre = persistencia. Tres senales
+  INDEPENDIENTES correladas con OR (cada una dispara por si sola; leccion de
+  AP04/AP05/AP07: nunca un AND global que descarte en silencio una rama): 4662
+  DCSync (estrella) con los GUID de replicacion por la cuenta de sync; 4769 TGS del
+  SPN Seamless SSO (HUNT: un silver ticket forjado offline NO siempre toca el DC);
+  4741/4742 creacion/cambio de AZUREADSSOACC$. Fuente: eventos de Seguridad de
+  Windows del DC ingeridos via Azure Monitor Agent + Data Collection Rule.
+  Prerequisito: auditoria de Directory Service Access + Kerberos Service Ticket
+  Operations + Computer Account Management (lo habilita seed-ap06; 4662 ADEMAS
+  requiere SACL sobre el naming context) — sin ello los eventos NO se generan. Pata
+  CLOUD (Entra SigninLogs del sign-in de Seamless SSO) NO provisionada por el lab:
+  limite declarado (como AP05 declara sus limites); complementar con Microsoft
+  Defender for Identity (Suspected DCSync / Suspected Golden/Silver Ticket).
+references:
+  - https://attack.mitre.org/techniques/T1552/
+  - https://attack.mitre.org/techniques/T1003/006/
+  - https://attack.mitre.org/techniques/T1558/001/
+  - https://attack.mitre.org/techniques/T1550/
+  - https://learn.microsoft.com/en-us/defender-for-identity/
+author: Caelum Range
+date: 2026-11-15
+logsource:
+  product: windows
+  service: security
+detection:
+  # senal ESTRELLA -> T1003.006: DCSync. 4662 (Directory Service Access) cuyo campo
+  # 'Properties' contiene los GUID de propiedad de replicacion de directorio. AMBOS
+  # (Get-Changes y -All) son requeridos para un DCSync funcional; se cubren con OR.
+  sel_dcsync_4662:
+    EventID: 4662
+    Properties|contains:
+      - '1131f6aa-9c07-11d1-f79f-00c04fc2dcd2'  # DS-Replication-Get-Changes
+      - '1131f6ad-9c07-11d1-f79f-00c04fc2dcd2'  # DS-Replication-Get-Changes-All
+  # senal HUNT -> T1558.001: TGS (4769) para el SPN de Seamless SSO. CAVEAT: un
+  # silver ticket forjado OFFLINE con la clave robada NO pasa por el KDC -> a menudo
+  # NO genera 4769; es hunt/baseline, nunca un AND gate del forge.
+  sel_sso_tgs_4769:
+    EventID: 4769
+    ServiceName|contains:
+      - 'AZUREADSSOACC'
+      - 'autologon.microsoftazuread-sso.com'
+  # senal -> seeding/rotacion: creacion (4741) o cambio (4742) de AZUREADSSOACC$.
+  # El sembrado por seed-ap06 y el -Remediate (rotar la clave 2x) disparan aqui.
+  sel_ssoacct_change_4741_4742:
+    EventID:
+      - 4741
+      - 4742
+    TargetUserName|contains: 'AZUREADSSOACC'
+  condition: sel_dcsync_4662 or sel_sso_tgs_4769 or sel_ssoacct_change_4741_4742
+fields:
+  - EventID
+  - SubjectUserName
+  - ObjectName
+  - Properties
+  - ServiceName
+  - TicketEncryptionType
+  - TargetUserName
+  - IpAddress
+falsepositives:
+  - Sincronizacion legitima de Azure AD Connect (la cuenta de sync real genera 4662 con los GUID de replicacion de forma constante): allowlist de la cuenta de sync conocida.
+  - Sign-ins legitimos de Seamless SSO (sel_sso_tgs_4769): baseline esperado; usar como hunt, no como alerta dura.
+  - Gestion legitima de la cuenta AZUREADSSOACC$ durante el rollover de clave aprobado (sel_ssoacct_change_4741_4742): ventanas de cambio conocidas.
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1552
+  - attack.t1003.006
+  - attack.t1558.001
+  - attack.lateral_movement
+  - attack.t1550
+# ---------------------------------------------------------------------
+# Mapeo senal -> etapa del ataque AP06 (ver AP06-entra-connect-seamless-sso.kql companero):
+#   sel_dcsync_4662 -> 4662 + GUID de replicacion por la cuenta de sync:
+#        DCSync = extraccion de las claves Kerberos de AZUREADSSOACC$             [T1552 -> T1003.006]
+#   sel_sso_tgs_4769 -> 4769 del SPN Seamless SSO: HUNT del silver ticket; CAVEAT
+#        LOAD-BEARING: un ticket forjado offline puede NO tocar el DC -> AUSENTE    [T1558.001]
+#   sel_ssoacct_change_4741_4742 -> 4741/4742 sobre AZUREADSSOACC$: seeding (seed-ap06)
+#        o rotacion de la vuln (-Remediate); el defensor VE plantarse/rotarse       [visibilidad]
+# CAVEATS:
+#   (1) 4662 es alto volumen y requiere Directory Service Access auditing + SACL
+#       sobre el naming context del dominio; SIN ello los eventos NO se generan.
+#       seed-ap06 habilita las subcategorias de auditoria (gated en enable_ap06).
+#   (2) El SILVER TICKET forjado offline NO siempre toca el DC -> 4769 es un HUNT,
+#       nunca un AND gate (exigirlo descartaria el propio forge — leccion de AP07).
+#   (3) LIMITE CLOUD declarado: la autenticacion efectiva a la nube con el ticket
+#       (T1550) se veria en Entra SigninLogs (autologon.microsoftazuread-sso.com) /
+#       AADServicePrincipalSignInLogs, pero el lab NO provisiona el tenant/Entra
+#       Connect -> AP06 cubre SOLO la pata ON-PREM. Complementar con Microsoft
+#       Defender for Identity (Suspected DCSync / Suspected Golden/Silver Ticket).
+#   (4) AZUREADSSOACC debe ser un objeto COMPUTER (sAMAccountName AZUREADSSOACC$)
+#       con los SPNs de Seamless SSO; su password NUNCA rota por defecto = la
+#       primitiva de persistencia de AP06.
+# ---------------------------------------------------------------------

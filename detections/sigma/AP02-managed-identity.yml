@@ -1,0 +1,70 @@
+title: Over-Privileged Managed Identity Self-Grant and Key Vault Secret Theft (Caelum AP02)
+id: 2d9c4f71-8a63-4e2b-b1c7-0a2f6e4b1c73
+status: experimental
+description: >
+  Detecta la cadena AP02: una Managed Identity (u otro principal) con privilegio
+  excesivo (Contributor en el RG) modifica la access policy de un Key Vault para
+  auto-concederse permiso de datos (self-grant, T1098) y/o se asigna un rol RBAC,
+  seguido de la lectura del secreto botin en el vault (T1552.005). El secreto es el
+  client secret de un service principal, lo que habilita movimiento lateral a datos
+  (T1078.004). La llamada al IMDS (169.254.169.254) para robar el token de la MI no
+  deja telemetria propia en Azure; la señal observable aparece aguas abajo en el
+  Activity Log y en el AuditEvent del Key Vault.
+references:
+  - https://attack.mitre.org/techniques/T1552/005/
+  - https://attack.mitre.org/techniques/T1078/004/
+  - https://attack.mitre.org/techniques/T1098/
+  - https://learn.microsoft.com/en-us/azure/key-vault/general/logging
+author: Caelum Range
+date: 2026-11-14
+logsource:
+  product: azure
+  service: activitylogs
+detection:
+  # --- Etapa 5 (T1098): self-grant reescribiendo la access policy del Key Vault ---
+  selection_kv_policy:
+    operationName|contains:
+      - 'Microsoft.KeyVault/vaults/accessPolicies/write'
+      - 'Microsoft.KeyVault/vaults/write'
+  # --- Etapa 5 (T1098/T1078.004): asignacion de rol excesiva a la identidad ---
+  selection_roleassign:
+    operationName|contains: 'Microsoft.Authorization/roleAssignments/write'
+  # Solo eventos exitosos. Se comprueban DOS campos porque no todos los registros
+  # exitosos pueblan properties.statusCode; el exito tambien se refleja en status.
+  filter_success_code:
+    properties.statusCode:
+      - 'OK'
+      - 'Created'
+      - 'Accepted'
+  filter_success_status:
+    status|contains: 'Succ'          # Success / Succeeded
+  condition: (selection_kv_policy or selection_roleassign) and (filter_success_code or filter_success_status)
+fields:
+  - caller                 # principal que actua (objectId de la MI sobre-privilegiada)
+  - callerIpAddress
+  - operationName
+  - resourceGroupName
+  - properties.statusCode
+falsepositives:
+  - IaC legitimo (Terraform/Bicep/ARM) que gestiona access policies o role assignments
+    durante despliegues autorizados — correlacionar con el principal de automatizacion esperado
+  - Operadores de plataforma concediendo acceso a Key Vault por cambios aprobados
+  - Nota: un self-grant seguido en minutos de un SecretGet por el MISMO principal
+    (ver AP02-managed-identity.kql, SALIDA 2) es de muy baja tasa de falso positivo
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1552.005          # robo del secreto del Key Vault (via token de MI por IMDS)
+  - attack.defense_evasion
+  - attack.persistence
+  - attack.t1098              # self-grant: modificar la access policy para concederse datos
+  - attack.privilege_escalation
+  - attack.t1078.004          # uso de MI sobre-privilegiada y del SP robado (lateral)
+# ---------------------------------------------------------------------
+# Mapeo señal -> etapa del ataque AP02:
+#   selection_kv_policy  -> Etapa 5: self-grant en Key Vault (access-policy)      [T1098]
+#   selection_roleassign -> Etapa 5 (variante RBAC) / privilegio excesivo base    [T1098 / T1078.004]
+#   (SecretGet del vault, Etapa 6 T1552.005) se cubre en el KQL: la tabla
+#   AuditEvent de Key Vault no es logsource de activitylogs. Para una regla Sigma
+#   dedicada al data-plane, usar un segundo fichero con logsource category: keyvault.
+# ---------------------------------------------------------------------

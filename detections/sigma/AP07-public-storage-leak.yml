@@ -1,0 +1,118 @@
+title: AP07 - Public Storage misconfig y recuperacion de clave (allowBlobPublicAccess / contenedor publico / listKeys)
+id: c4f8e1a6-2b7d-4e39-9a1f-6c3b8d05e2f4
+status: experimental
+description: |
+  Detecta el PLANO DE GESTION de la cadena AP07 de Caelum Range (exfiltracion en el plano
+  de almacenamiento de Azure). Una storage account se despliega / deriva a vulnerable con DOS
+  puertas de acceso anonimo: a nivel de CUENTA allowBlobPublicAccess=true
+  (Microsoft.Storage/storageAccounts/write) y a nivel de CONTENEDOR publicAccess=blob|container
+  (Microsoft.Storage/storageAccounts/blobServices/containers/write; 'container' ademas habilita
+  el LIST anonimo = T1619). Dentro del contenedor publico se filtra 'backup-config.json' con una
+  credencial sobre-permisionada (una SAS de cuenta de larga vida o la clave de cuenta) hacia el
+  contenedor privado 'sensitive-data'; la recuperacion de la clave de cuenta se observa como
+  Microsoft.Storage/storageAccounts/listKeys/action (T1552.001). El defensor VE plantarse la vuln:
+  el propio despliegue del lab genera estos eventos (paralelo a 4899/4900 en AP05). El PLANO DE
+  DATOS (acceso ANONIMO a los blobs y el PIVOTE con SAS/clave contra 'sensitive-data') vive en
+  StorageBlobLogs, que NO es un logsource Sigma estandar -> se cubre en el KQL companero
+  AP07-public-storage-leak.kql, KQL-primary para esa parte (senal de oro AuthenticationType==
+  'Anonymous' + correlacion de cadena por CallerIpAddress).
+references:
+  - https://attack.mitre.org/techniques/T1530/
+  - https://attack.mitre.org/techniques/T1619/
+  - https://attack.mitre.org/techniques/T1552/001/
+  - https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-configure
+  - https://learn.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage
+  - https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations
+author: Caelum Range
+date: 2026-11-15
+logsource:
+  product: azure
+  service: activitylogs
+detection:
+  # senal -> misconfig de CUENTA (puerta 1): creacion/actualizacion de la storage account.
+  # El valor allowBlobPublicAccess=true (la vuln) NO siempre se serializa en AzureActivity
+  # (el cuerpo de la peticion no viaja fiable) -> se keyea en la OPERACION, no en el valor;
+  # el valor se confirma en el plano de datos (KQL companero) o leyendo la config de la cuenta.
+  # Dispara tambien en el despliegue del lab y en la remediacion (allowBlobPublicAccess=false):
+  # el defensor VE plantarse / retirarse la vuln (como 4899/4900 en AP05).
+  sel_account_write:
+    operationName|contains: 'Microsoft.Storage/storageAccounts/write'
+  # senal -> recuperacion de la CLAVE de cuenta (leak_mode=account_key, o cualquier robo de
+  # clave): listKeys expone la shared key = control total del plano de datos (todos los
+  # contenedores, escribir, borrar). Firma directa de T1552.001 en el plano de gestion.
+  sel_listkeys:
+    operationName|contains: 'Microsoft.Storage/storageAccounts/listKeys/action'
+  # senal -> misconfig de CONTENEDOR (puerta 2): creacion/actualizacion de un contenedor via ARM
+  # (publicAccess=blob abre LECTURA anonima; publicAccess=container ademas habilita LIST anonimo).
+  sel_container_write:
+    operationName|contains: 'Microsoft.Storage/storageAccounts/blobServices/containers/write'
+  # Solo eventos exitosos (mismo patron que AP02): no todos los registros exitosos pueblan
+  # properties.statusCode -> se comprueba TAMBIEN status (OR entre ambos, nunca un AND que
+  # descarte en silencio los registros que solo pueblan uno de los campos).
+  filter_success_code:
+    properties.statusCode:
+      - 'OK'
+      - 'Created'
+      - 'Accepted'
+  filter_success_status:
+    status|contains: 'Succ'          # Success / Succeeded
+  condition: (sel_account_write or sel_listkeys or sel_container_write) and (filter_success_code or filter_success_status)
+fields:
+  - caller                 # principal que actua (objectId / UPN; esperado IaC/operador, no un atacante)
+  - callerIpAddress
+  - operationName
+  - resourceGroupName
+  - properties.statusCode
+falsepositives:
+  - IaC legitimo (Terraform/Bicep/ARM) o pipelines que crean/actualizan storage accounts y
+    contenedores durante despliegues autorizados (sel_account_write / sel_container_write) -
+    correlacionar con el principal de automatizacion esperado y acotar a las cuentas del lab.
+    Nota - sel_account_write (storageAccounts/write) es ALTO VOLUMEN - dispara en CUALQUIER
+    cambio de propiedad de la cuenta, no solo en allowBlobPublicAccess=true (por eso level medium).
+  - Rotacion/lectura legitima de claves de cuenta por operadores o aplicaciones que aun usan
+    shared key (sel_listkeys); allowlist de esos principales y migrar el plano de datos a Entra RBAC.
+  - Nota de alta fidelidad - la confirmacion de que la cuenta quedo ANONIMAMENTE accesible
+    (allowBlobPublicAccess=true + contenedor publico) y el PIVOTE SAS/clave contra 'sensitive-data'
+    se ven en el PLANO DE DATOS (StorageBlobLogs) -> AP07-public-storage-leak.kql, de muy baja FP.
+level: medium
+tags:
+  - attack.collection
+  - attack.t1530              # Data from Cloud Storage (objetivo de la cadena)
+  - attack.discovery
+  - attack.t1619              # Cloud Storage Object Discovery (publicAccess=container -> LIST anonimo)
+  - attack.credential_access
+  - attack.t1552.001          # Credentials In Files / listKeys = recuperacion de la shared key
+# ---------------------------------------------------------------------
+# Mapeo senal -> etapa del ataque AP07 (ver AP07-public-storage-leak.kql companero):
+#   sel_account_write   -> allowBlobPublicAccess=true a nivel de CUENTA (puerta 1 abierta). [misconfig]
+#   sel_container_write -> publicAccess=blob|container a nivel de CONTENEDOR (puerta 2;
+#                          'container' habilita el LIST anonimo = T1619).                   [misconfig]
+#   sel_listkeys        -> recuperacion de la shared key (leak_mode=account_key / robo).    [T1552.001]
+#
+# REPARTO Sigma vs KQL (declarado EXPLICITO, como AP02 'el AuditEvent del KV no es
+# activitylogs' y AP05 'el SAN no viaja en 4886/4887'):
+#   * Sigma (ESTE fichero, logsource azure/activitylogs) = PLANO DE GESTION: el misconfig
+#     (allowBlobPublicAccess / publicAccess) + listKeys. Es lo que el logsource azure modela.
+#   * El PLANO DE DATOS -acceso ANONIMO a los blobs (ListBlobs/GetBlob) y el PIVOTE con SAS/
+#     clave contra 'sensitive-data'- vive en StorageBlobLogs, que NO es un logsource Sigma
+#     estandar -> KQL-primary (AP07-public-storage-leak.kql: SENAL A anonima, SENAL B pivote,
+#     SALIDA 2 correlacion de cadena por CallerIpAddress).
+#
+# CAVEATS:
+#   (1) StorageBlobLogs NO esta activo por defecto (requiere el diagnostic setting sobre
+#       blobServices/default con destino "Dedicated"). AzureActivity -este fichero- SI fluye
+#       sin provisionar nada (el misconfig y el listKeys siempre quedan registrados).
+#   (2) El VALOR del misconfig (allowBlobPublicAccess=true, publicAccess=container) NO siempre
+#       se serializa en AzureActivity -> la regla keyea en la OPERACION; confirmar el valor en
+#       el plano de datos (KQL) o leyendo la config de la cuenta. Por eso level: medium.
+#   (3) sel_container_write (blobServices/containers/write) NO dispara en el DESPLIEGUE del lab:
+#       azurerm_storage_container crea el contenedor por el PLANO DE DATOS (REST API de Blob),
+#       no por ARM, asi que ese evento no llega a AzureActivity en el apply. La telemetria de
+#       DESPLIEGUE la aportan sel_account_write (storageAccounts/write con allowBlobPublicAccess=
+#       true) + sel_listkeys. sel_container_write solo dispara ante cambios de contenedor via
+#       portal/CLI/ARM/azapi (flip de acceso publico por un admin o atacante) -> sigue siendo
+#       contenido Azure valido, pero un instructor NO debe esperar que se encienda al validar el lab.
+#   (4) Complementar con Microsoft Defender for Storage (acceso anonimo/exfil nativos) y con
+#       Azure Policy 'Storage account public access should be disallowed' (impide el drift a
+#       vulnerable en toda la subscription).
+# ---------------------------------------------------------------------

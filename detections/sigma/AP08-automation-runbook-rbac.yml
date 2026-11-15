@@ -1,0 +1,120 @@
+title: AP08 - Automation runbook authoring/execution y roleAssignments/write (escalada RBAC via Automation Account)
+id: a7d3f2b9-8c14-4e6a-b5f0-2d9c1e4a7b63
+status: experimental
+description: |
+  Detecta el PLANO DE GESTION de la cadena AP08 de Caelum Range. Un Automation Account con
+  system-assigned Managed Identity SOBRE-PRIVILEGIADA (User Access Administrator u Owner sobre su
+  RG, ambos con Microsoft.Authorization/roleAssignments/write) es conducido por un principal de
+  BAJO privilegio con Automation Contributor. El low-priv autora y PUBLICA un runbook
+  (Microsoft.Automation/automationAccounts/runbooks/write, .../runbooks/draft/content/write,
+  .../runbooks/publish/action) y LANZA un job (.../jobs/write = T1651, Cloud Administration
+  Command); el job corre COMO la MI y ejecuta New-AzRoleAssignment, que se observa como
+  Microsoft.Authorization/roleAssignments/write (T1098.003) CUYO Caller ES el objectId de la MI
+  del Automation Account -> auto-concesion de Owner del RG (T1078.004).
+  SENAL DE ORO y por que es KQL-primary: el discriminador que separa el despliegue del ataque es
+  Caller==objectId-de-la-MI (en el apply del lab el grant MI->rol lo ejecuta el DEPLOYER; en el
+  ataque lo ejecuta la MI). Ese objectId VARIA por despliegue -> una regla Sigma estatica no lo
+  puede fijar: el estrechamiento Caller==MI y la correlacion de la cadena (job-launch low-priv ->
+  MI-grant en el mismo RG) viven en el KQL companero AP08-automation-runbook-rbac.kql. Esta regla
+  Sigma cubre las OPERACIONES de control-plane (autoria + job + roleAssignment) que el logsource
+  azure/activitylogs modela de forma portable; el instructor confirma Caller==MI en el KQL.
+  PLANO DE DATOS (KQL-primary, NO cubierto aqui): la EJECUCION del runbook y el texto literal
+  New-AzRoleAssignment/Owner viven en JobLogs/JobStreams (AzureDiagnostics, ResourceProvider ==
+  MICROSOFT.AUTOMATION), que NO es un logsource Sigma estandar y que ademas esta OFF por defecto
+  (sin el diagnostic setting del Automation Account la ejecucion NO existe en ningun SIEM) -> ver
+  AP08-automation-runbook-rbac.kql (SignalD + SALIDA 2).
+references:
+  - https://attack.mitre.org/techniques/T1651/
+  - https://attack.mitre.org/techniques/T1098/003/
+  - https://attack.mitre.org/techniques/T1078/004/
+  - https://learn.microsoft.com/en-us/azure/automation/enable-managed-identity-for-automation
+  - https://learn.microsoft.com/en-us/azure/automation/automation-manage-send-joblogs-log-analytics
+author: Caelum Range
+date: 2026-11-15
+logsource:
+  product: azure
+  service: activitylogs
+detection:
+  # senal -> AUTORIA del runbook (crear/actualizar + escribir draft content + PUBLICAR). En el lab
+  # lo dispara el apply de Terraform (la gun cargada): el defensor VE plantarse el arma (paralelo a
+  # 4899/4900 de AP05 y a storageAccounts/write de AP07). Caller = el deployer o el low-priv autor.
+  sel_runbook_authoring:
+    operationName|contains:
+      - 'Microsoft.Automation/automationAccounts/runbooks/write'
+      - 'Microsoft.Automation/automationAccounts/runbooks/draft/content/write'
+      - 'Microsoft.Automation/automationAccounts/runbooks/publish/action'
+  # senal -> EJECUCION: lanzamiento de un job del runbook. T1651 (Cloud Administration Command).
+  # Terraform NUNCA lo dispara -> jobs/write solo aparece cuando el ALUMNO ejecuta el "rompe".
+  sel_job_write:
+    operationName|contains: 'Microsoft.Automation/automationAccounts/jobs/write'
+  # senal -> el self-grant: roleAssignments/write. La SENAL DE ORO es que su Caller sea la MI del
+  # Automation Account (NO expresable en Sigma estatico: objectId variable -> KQL companero). Aqui
+  # se capta la OPERACION; el triage del Caller (Caller==ap08_mi_principal_id) vive en el KQL.
+  sel_roleassignment_write:
+    operationName|contains: 'Microsoft.Authorization/roleAssignments/write'
+  # Solo eventos exitosos (mismo patron que AP02/AP07): no todos los registros exitosos pueblan
+  # properties.statusCode -> se comprueba TAMBIEN status (OR, nunca un AND que descarte en silencio
+  # los registros que solo pueblan uno de los dos campos).
+  filter_success_code:
+    properties.statusCode:
+      - 'OK'
+      - 'Created'
+      - 'Accepted'
+  filter_success_status:
+    status|contains: 'Succ'          # Success / Succeeded
+  condition: (sel_runbook_authoring or sel_job_write or sel_roleassignment_write) and (filter_success_code or filter_success_status)
+fields:
+  - caller                 # principal que actua: deployer/low-priv (autoria,job) o la MI (roleAssignment = oro)
+  - callerIpAddress
+  - operationName
+  - resourceGroupName
+  - properties.statusCode
+falsepositives:
+  - IaC legitimo (Terraform/Bicep/ARM) o pipelines que crean/actualizan/PUBLICAN runbooks durante
+    despliegues autorizados (sel_runbook_authoring) - el propio apply del lab AP08 los dispara;
+    correlacionar con el principal de automatizacion esperado y acotar al RG del lab.
+  - Ejecucion legitima de runbooks de operacion (sel_job_write) - alto volumen en tenants que usan
+    Automation para mantenimiento; por si solo NO implica ataque (es T1651 solo en contexto de la cadena).
+  - Gestion legitima de RBAC por operadores/IaC (sel_roleassignment_write) - ALTA FRECUENCIA. La
+    discriminacion de BAJA FP es Caller==objectId-de-una-MI-de-Automation, que esta regla NO puede
+    expresar (objectId variable) -> usar AP08-automation-runbook-rbac.kql (SignalC filtra Caller==MI;
+    SALIDA 2 correla job-launch low-priv -> MI-grant en el mismo RG en ventana corta = casi cero FP).
+level: medium
+tags:
+  - attack.execution
+  - attack.t1651              # Cloud Administration Command (ejecutar comandos via el runbook)
+  - attack.privilege_escalation
+  - attack.t1098.003          # Additional Cloud Roles (el roleAssignments/write auto-concedido)
+  - attack.persistence
+  - attack.t1078.004          # Valid Accounts: Cloud Accounts (persistencia como Owner del RG)
+# ---------------------------------------------------------------------
+# Mapeo senal -> etapa del ataque AP08 (ver AP08-automation-runbook-rbac.kql companero):
+#   sel_runbook_authoring     -> Etapa 1: autoria + PUBLICACION del runbook (gun cargada).   [T1651 precursor]
+#   sel_job_write             -> Etapa 2: lanzamiento del job = EJECUCION del runbook.        [T1651]
+#   sel_roleassignment_write  -> Etapa 3: self-grant de Owner del RG (oro si Caller==MI).     [T1098.003 -> T1078.004]
+#
+# REPARTO Sigma vs KQL (declarado EXPLICITO, como AP02 'el AuditEvent del KV no es activitylogs' y
+# AP07 'StorageBlobLogs no es logsource Sigma'):
+#   * Sigma (ESTE fichero, logsource azure/activitylogs) = las OPERACIONES de control-plane. Es lo
+#     que el logsource azure modela de forma portable.
+#   * La SENAL DE ORO (roleAssignments/write con Caller == objectId de la MI) NO es expresable en
+#     Sigma estatico porque ese objectId VARIA por despliegue -> KQL companero (parametro
+#     mi_principal_id = output ap08_mi_principal_id).
+#   * El PLANO DE DATOS -JobLogs/JobStreams: la EJECUCION y el texto New-AzRoleAssignment/Owner en
+#     los streams- vive en AzureDiagnostics (ResourceProvider==MICROSOFT.AUTOMATION), que NO es un
+#     logsource Sigma estandar -> KQL-primary (AP08-...-rbac.kql, SignalD + SALIDA 2 de correlacion).
+#
+# CAVEATS:
+#   (1) JobLogs/JobStreams estan OFF por defecto (requieren el diagnostic setting sobre el Automation
+#       Account). AzureActivity -este fichero- SI fluye sin provisionar nada (autoria, jobs/write y
+#       roleAssignments/write siempre quedan registrados).
+#   (2) DISCRIMINADOR deploy-vs-ataque: en el apply del lab el grant MI->rol lo ejecuta el DEPLOYER
+#       (Caller == identidad de Terraform); en el ataque lo ejecuta la MI (Caller == objectId MI).
+#       sel_roleassignment_write capta AMBOS -> por eso level: medium y el Caller==MI vive en el KQL.
+#   (3) sel_runbook_authoring y sel_job_write SI disparan en una validacion normal del lab (el apply
+#       publica el runbook; el alumno lanza el job). El instructor debe esperar verlos; la escalada se
+#       confirma con el roleAssignments/write POR la MI (KQL SignalC) y la correlacion (KQL SALIDA 2).
+#   (4) Complementar con Microsoft Defender for Cloud (role assignment anomalo), Azure Policy que
+#       deniegue Owner/User Access Administrator a identidades de Automation, y PIM (sin standing
+#       Owner/UAA para ninguna identidad).
+# ---------------------------------------------------------------------
