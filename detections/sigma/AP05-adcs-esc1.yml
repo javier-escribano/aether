@@ -1,23 +1,23 @@
-title: AP05 - AD CS ESC1 (Enrollee-Supplies-Subject) - enrolamiento de honeytemplate, cambio de plantilla y TGT PKINIT en DC hibrido
+title: AP05 - AD CS ESC1 (Enrollee-Supplies-Subject) - honeytemplate enrollment, template change and PKINIT TGT on a hybrid DC
 id: 7d9b2c4a-5e61-4f8a-b3c2-1a2b3c4d5e6f
 status: experimental
 description: |
-  Detecta la cadena AP05 de Caelum Range (AD CS ESC1 sobre un DC hibrido on-prem en
-  Azure IaaS). Un usuario de bajo privilegio (CAELUM\ap05user) enrola la plantilla
-  deliberadamente vulnerable 'CaelumAuthESC1' (ENROLLEE_SUPPLIES_SUBJECT + Client
-  Authentication + Enroll para Domain Users + sin aprobacion de manager), especifica
-  SAN = UPN de un Domain Admin, y autentica el certificado forjado via PKINIT para
-  obtener un TGT como ese DA (-> DCSync). Fuente: eventos de Seguridad de Windows del
-  DC/CA ingeridos via Azure Monitor Agent + Data Collection Rule (NO logs cloud de
-  Entra). Tres senales INDEPENDIENTES correladas con OR (cada una dispara por si sola;
-  leccion de AP04: nunca un AND global que descarte en silencio una rama cuando falta
-  un evento o el SAN no viaja): (sel_request_issue / sel_request_issue_attrs) solicitud
-  o emision de cert sobre la honeytemplate ESC1 = T1649; (sel_template_change)
-  alta/cambio/seguridad de una plantilla AD CS = seeding o manipulacion; (sel_pkinit_tgt)
-  TGT Kerberos via PKINIT = uso del certificado forjado (T1550). Prerequisito: auditoria
-  AD CS (certutil -setreg CA\AuditFilter 127 + auditpol 'Certification Services') y
-  'Kerberos Authentication Service' (Success) habilitadas; sin ellas los eventos NO se
-  generan. Complemento: Microsoft Defender for Identity trae deteccion ESC1 nativa.
+  Detects the AP05 chain of Azure Attack Range (AD CS ESC1 on a hybrid on-prem DC in
+  Azure IaaS). A low-privilege user (AZRANGE\ap05user) enrolls the deliberately
+  vulnerable template 'AzRangeAuthESC1' (ENROLLEE_SUPPLIES_SUBJECT + Client
+  Authentication + Enroll for Domain Users + no manager approval), specifies
+  SAN = UPN of a Domain Admin, and authenticates the forged certificate via PKINIT to
+  obtain a TGT as that DA (-> DCSync). Source: Windows Security events from the
+  DC/CA ingested via Azure Monitor Agent + Data Collection Rule (NOT Entra cloud
+  logs). Three INDEPENDENT signals correlated with OR (each one fires on its own;
+  lesson from AP04: never a global AND that silently discards a branch when an event
+  is missing or the SAN does not travel): (sel_request_issue / sel_request_issue_attrs) request
+  or issuance of a cert on the ESC1 honeytemplate = T1649; (sel_template_change)
+  creation/change/security of an AD CS template = seeding or tampering; (sel_pkinit_tgt)
+  Kerberos TGT via PKINIT = use of the forged certificate (T1550). Prerequisite: AD CS
+  auditing (certutil -setreg CA\AuditFilter 127 + auditpol 'Certification Services') and
+  'Kerberos Authentication Service' (Success) enabled; without them the events are NOT
+  generated. Complement: Microsoft Defender for Identity ships native ESC1 detection.
 references:
   - https://attack.mitre.org/techniques/T1649/
   - https://attack.mitre.org/techniques/T1550/
@@ -26,38 +26,38 @@ references:
   - https://www.blackhillsinfosec.com/detecting-adcs-privilege-escalation/
   - https://posts.specterops.io/certified-pre-owned-d95910965cd2
   - https://learn.microsoft.com/en-us/defender-for-identity/
-author: Caelum Range
+author: Azure Attack Range
 date: 2026-11-14
 logsource:
   product: windows
   service: security
 detection:
-  # senal -> T1649: solicitud (4886) / EMISION (4887) de cert sobre la honeytemplate ESC1.
-  # El nombre de plantilla NO es un campo dedicado fiable en 4886/4887: en builds < WS2025
-  # viaja dentro de 'Attributes' (linea "CertificateTemplate:<cn|oid>"); WS2025 y algunos
-  # pipelines normalizados exponen un campo 'CertificateTemplate'. Se cubren AMBAS ubicaciones
-  # con OR para no perder la rama (ningun AND silencioso — leccion de AP04).
+  # signal -> T1649: request (4886) / ISSUANCE (4887) of a cert on the ESC1 honeytemplate.
+  # The template name is NOT a reliable dedicated field in 4886/4887: in builds < WS2025 it
+  # travels inside 'Attributes' (line "CertificateTemplate:<cn|oid>"); WS2025 and some
+  # normalized pipelines expose a 'CertificateTemplate' field. BOTH locations are covered
+  # with OR so the branch is not lost (no silent AND - lesson from AP04).
   sel_request_issue:
     EventID:
       - 4886
       - 4887
-    CertificateTemplate|contains: 'CaelumAuthESC1'
+    CertificateTemplate|contains: 'AzRangeAuthESC1'
   sel_request_issue_attrs:
     EventID:
       - 4886
       - 4887
-    Attributes|contains: 'CaelumAuthESC1'
-  # senal -> seeding / manipulacion: plantilla AD CS actualizada (4899) o su seguridad (4900).
-  # El sembrado de 'CaelumAuthESC1' (seed-ap05) y la remediacion (-Remediate) disparan aqui.
+    Attributes|contains: 'AzRangeAuthESC1'
+  # signal -> seeding / tampering: AD CS template updated (4899) or its security (4900).
+  # Seeding 'AzRangeAuthESC1' (seed-ap05) and remediation (-Remediate) fire here.
   sel_template_change:
     EventID:
       - 4899
       - 4900
-  # senal -> T1550: TGT Kerberos (4768) via PKINIT = autenticacion con el cert forjado.
-  # PreAuthType 16 = PA-PK-AS-REQ (PKINIT); la preauth por password es 2. Se usa PreAuthType
-  # en lugar de 'CertThumbprint|exists' porque en Windows 2016+ el campo CertThumbprint SIEMPRE
-  # esta presente (vacio para no-PKINIT) -> '|exists' igualaria TODO 4768 (alto volumen); la
-  # senal equivalente es CertThumbprint / CertSerialNumber NO vacios.
+  # signal -> T1550: Kerberos TGT (4768) via PKINIT = authentication with the forged cert.
+  # PreAuthType 16 = PA-PK-AS-REQ (PKINIT); password preauth is 2. PreAuthType is used
+  # instead of 'CertThumbprint|exists' because on Windows 2016+ the CertThumbprint field is ALWAYS
+  # present (empty for non-PKINIT) -> '|exists' would match ALL 4768 (high volume); the
+  # equivalent signal is CertThumbprint / CertSerialNumber being non-empty.
   sel_pkinit_tgt:
     EventID: 4768
     PreAuthType: 16
@@ -73,9 +73,9 @@ fields:
   - PreAuthType
   - CertThumbprint
 falsepositives:
-  - Enrolamiento legitimo en plantillas de autenticacion custom o smartcard si se reutiliza el nombre; acotar sel_request_issue/_attrs al nombre EXACTO de la honeytemplate del lab (CaelumAuthESC1).
-  - Logons por smartcard / PKINIT legitimos (sel_pkinit_tgt); mantener una allowlist de cuentas y hosts con PKINIT esperado.
-  - Gestion legitima de plantillas por administradores de PKI (sel_template_change); allowlist de los PKI admins y ventanas de cambio aprobadas.
+  - Legitimate enrollment in custom or smartcard authentication templates if the name is reused; scope sel_request_issue/_attrs to the EXACT name of the lab honeytemplate (AzRangeAuthESC1).
+  - Legitimate smartcard / PKINIT logons (sel_pkinit_tgt); maintain an allowlist of accounts and hosts with expected PKINIT.
+  - Legitimate template management by PKI administrators (sel_template_change); allowlist the PKI admins and approved change windows.
 level: high
 tags:
   - attack.credential_access
@@ -85,20 +85,20 @@ tags:
   - attack.t1550
   - attack.t1003.006
 # ---------------------------------------------------------------------
-# Mapeo senal -> etapa del ataque AP05 (ver AP05-adcs-esc1.kql companero):
-#   sel_request_issue / sel_request_issue_attrs -> 4886/4887 sobre 'CaelumAuthESC1':
-#        enrolar la honeytemplate NUNCA es normal -> cada hit es sospechoso        [T1649]
-#   sel_template_change -> 4899/4900: seeding de la vuln (seed-ap05) o su
-#        remediacion/manipulacion; el defensor VE plantarse/retirarse la vuln      [T1649]
-#   sel_pkinit_tgt -> 4768 PreAuthType=16: TGT via PKINIT con el cert forjado
-#        (en el KQL companero se correla con la emision -> cuenta DISTINTA/priv)   [T1550 -> T1003.006 DCSync]
+# Signal -> AP05 attack stage mapping (see companion AP05-adcs-esc1.kql):
+#   sel_request_issue / sel_request_issue_attrs -> 4886/4887 on 'AzRangeAuthESC1':
+#        enrolling the honeytemplate is NEVER normal -> every hit is suspicious     [T1649]
+#   sel_template_change -> 4899/4900: seeding the vuln (seed-ap05) or its
+#        remediation/tampering; the defender SEES the vuln planted/removed          [T1649]
+#   sel_pkinit_tgt -> 4768 PreAuthType=16: TGT via PKINIT with the forged cert
+#        (in the companion KQL it is correlated with issuance -> DIFFERENT/priv acct)[T1550 -> T1003.006 DCSync]
 # CAVEATS:
-#   (1) El SAN forjado (UPN del DA) NO viaja fiable en 4886/4887 — vive en la CA DB
-#       (certutil -view); por eso la regla NO depende de requester!=SAN: se apoya en
-#       que enrolar la honeytemplate ya es sospechoso y en la correlacion con 4768.
-#   (2) Prerequisito de auditoria (AuditFilter 127 + auditpol 'Certification Services'
-#       y 'Kerberos Authentication Service'): SIN el, los eventos NO se generan.
-#   (3) Complementar con Microsoft Defender for Identity (deteccion ESC1 nativa) y, tras
-#       KB5014754, con los eventos 39/41 del canal System (Kerberos-Key-Distribution-Center)
-#       cuando el SID del solicitante != SID del subject (strong certificate mapping).
+#   (1) The forged SAN (DA's UPN) does NOT travel reliably in 4886/4887 - it lives in the CA DB
+#       (certutil -view); that is why the rule does NOT depend on requester!=SAN: it relies on
+#       the fact that enrolling the honeytemplate is already suspicious and on the correlation with 4768.
+#   (2) Auditing prerequisite (AuditFilter 127 + auditpol 'Certification Services'
+#       and 'Kerberos Authentication Service'): WITHOUT it, the events are NOT generated.
+#   (3) Complement with Microsoft Defender for Identity (native ESC1 detection) and, after
+#       KB5014754, with System channel events 39/41 (Kerberos-Key-Distribution-Center)
+#       when the requester SID != subject SID (strong certificate mapping).
 # ---------------------------------------------------------------------

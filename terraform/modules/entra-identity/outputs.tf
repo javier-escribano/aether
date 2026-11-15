@@ -11,13 +11,13 @@ output "ap01_consent_url" {
     "https://login.microsoftonline.com/${var.tenant_domain}/oauth2/v2.0/authorize",
     "?client_id=${azuread_application.ap01[0].client_id}",
     "&response_type=code",
-    "&redirect_uri=https%3A%2F%2Flocalhost%2Fcaelum-ap01",
+    "&redirect_uri=https%3A%2F%2Flocalhost%2Fazrange-ap01",
     "&response_mode=query",
     "&scope=offline_access%20Mail.Read%20Files.Read.All"
   ]) : null
 }
 
-# --- AP03 (null si enable_ap03 = false) ---
+# --- AP03 (null when enable_ap03 = false) ---
 output "ap03_group_object_id" {
   value = var.enable_ap03 ? azuread_group.ap03_role_admins[0].object_id : null
 }
@@ -28,13 +28,13 @@ output "ap03_target_role" {
 
 output "ap03_attacker_hint" {
   value = var.enable_ap03 ? join("", [
-    "Eres OWNER del grupo role-assignable ", azuread_group.ap03_role_admins[0].display_name, ". ",
-    "Auto-anadete como miembro (POST /groups/<id>/members/$ref), re-autentica para heredar ",
-    "Privileged Role Administrator y auto-asignate Global Administrator."
+    "You are the OWNER of the role-assignable group ", azuread_group.ap03_role_admins[0].display_name, ". ",
+    "Add yourself as a member (POST /groups/<id>/members/$ref), re-authenticate to inherit ",
+    "Privileged Role Administrator, and assign yourself Global Administrator."
   ]) : null
 }
 
-# --- AP04 (null si enable_ap04 = false) ---
+# --- AP04 (null when enable_ap04 = false) ---
 output "ap04_app_id" {
   value = var.enable_ap04 ? azuread_application.ap04_app[0].client_id : null
 }
@@ -49,9 +49,9 @@ output "ap04_graph_app_role" {
 
 output "ap04_attacker_hint" {
   value = var.enable_ap04 ? join("", [
-    "Eres OWNER del app registration ", azuread_application.ap04_app[0].display_name, ". ",
-    "Anade un client secret (az ad app credential reset --id ", azuread_application.ap04_app[0].client_id, "), ",
-    "autenticate como el SP via client_credentials y, con RoleManagement.ReadWrite.Directory, ",
-    "POST /roleManagement/directory/roleAssignments asignando Global Administrator (62e90394-69f5-4237-9190-012177145e10)."
+    "You are the OWNER of the app registration ", azuread_application.ap04_app[0].display_name, ". ",
+    "Add a client secret (az ad app credential reset --id ", azuread_application.ap04_app[0].client_id, "), ",
+    "authenticate as the SP via client_credentials and, with RoleManagement.ReadWrite.Directory, ",
+    "POST /roleManagement/directory/roleAssignments to assign Global Administrator (62e90394-69f5-4237-9190-012177145e10)."
   ]) : null
 }

@@ -1,17 +1,23 @@
 # === Terraform ===
-# NUNCA comitees estado ni secretos: contienen credenciales del range en claro.
+# NEVER commit state or secrets: they contain range credentials in cleartext.
 *.tfstate
 *.tfstate.*
 .terraform/
-.terraform.lock.hcl
+# .terraform.lock.hcl is intentionally COMMITTED: it pins provider versions + hashes
+# (supply-chain integrity) and holds no secrets.
 crash.log
 crash.*.log
 
-# Artefacto del paquete DSC de AP05 (archive_file lo regenera en cada plan/apply).
-CaelumDC.zip
+# Terraform plan files (a saved plan embeds state + secrets in cleartext)
+*.tfplan
+tfplan
+*.plan
+
+# AP05 DSC package artifact (archive_file regenerates it on each plan/apply).
+AzRangeDC.zip
 .dsc-build/
 
-# Variables reales (solo se versiona el .example)
+# Real variables (only the .example is versioned)
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
@@ -22,7 +28,7 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
-# === Secretos / credenciales ===
+# === Secrets / credentials ===
 *.pem
 *.key
 *.pfx
@@ -33,12 +39,26 @@ sp-credentials.json
 .env
 .env.*
 
-# === PowerShell / salida de scripts ===
+# SSH private keys (in case an operator adds their own to reach a VM)
+id_rsa*
+id_ed25519*
+*_rsa
+
+# Cloud CLI token caches / registry credentials
+.azure/
+msal_token_cache.*
+.terraformrc
+terraform.rc
+
+# DSC compiled artifacts (localhost.mof may embed plaintext credentials)
+*.mof
+
+# === PowerShell / script output ===
 *.clixml
 seed-output-*.json
 verify-report-*.json
 
-# === Sistema ===
+# === System ===
 .DS_Store
 Thumbs.db
 *.log

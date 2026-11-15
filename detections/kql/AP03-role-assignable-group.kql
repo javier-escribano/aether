@@ -1,53 +1,53 @@
 // =====================================================================
-// AP03 — Owner de bajo privilegio sobre grupo ROLE-ASSIGNABLE que porta
-//        el rol de directorio 'Privileged Role Administrator' (PRA).
-//        Cadena: ownership del grupo -> el owner se AUTO-ANADE a la
-//        membership (por defecto en Entra solo GA, PRA y los OWNERS
-//        pueden tocar la membership de un grupo role-assignable) ->
-//        hereda PRA (asignado AL GRUPO) -> se auto-asigna Global
-//        Administrator = toma del tenant.
+// AP03 — Low-privilege Owner over a ROLE-ASSIGNABLE group that carries
+//        the directory role 'Privileged Role Administrator' (PRA).
+//        Chain: group ownership -> the owner SELF-ADDS to the
+//        membership (by default in Entra only GA, PRA and the OWNERS
+//        can touch the membership of a role-assignable group) ->
+//        inherits PRA (assigned TO THE GROUP) -> self-assigns Global
+//        Administrator = tenant takeover.
 //
-// Fuente: Entra ID Audit Logs (tabla AuditLogs en Sentinel / Defender XDR)
+// Source: Entra ID Audit Logs (AuditLogs table in Sentinel / Defender XDR)
 //
-// MITRE: T1098     (Account Manipulation: el owner manipula su propia
-//                   cuenta auto-anadiendose como miembro del grupo que posee)
-//        T1098.003 (Additional Cloud Roles: hereda el rol de directorio
-//                   Privileged Role Administrator por la pertenencia al grupo)
-//        T1078.004 (Valid Accounts: Cloud Accounts — ejerce PRA para
-//                   auto-asignarse Global Administrator)
-//        NOTA: el tentativo 'T1484.003' del catalogo NO existe en ATT&CK
-//        (T1484 solo tiene .001 Group Policy Modification y .002 Trust
-//        Modification); sustituido por el set validado de arriba.
+// MITRE: T1098     (Account Manipulation: the owner manipulates their own
+//                   account by self-adding as a member of the group they own)
+//        T1098.003 (Additional Cloud Roles: inherits the directory role
+//                   Privileged Role Administrator through group membership)
+//        T1078.004 (Valid Accounts: Cloud Accounts — exercises PRA to
+//                   self-assign Global Administrator)
+//        NOTE: the tentative 'T1484.003' from the catalog does NOT exist in ATT&CK
+//        (T1484 only has .001 Group Policy Modification and .002 Trust
+//        Modification); replaced by the validated set above.
 //
-// CAVEAT: AuditLogs no expone directamente isAssignableToRole del grupo.
-// Se ancla el grupo por nombre/objectId conocido del lab (role_group_name /
-// role_group_id) y, para cobertura generica, por su rol portado. La herencia
-// de PRA al entrar en el grupo NO genera un evento propio: la senal
-// observable es el 'Add member to group' (self-add) y, aguas arriba/abajo,
-// la asignacion de rol al grupo y el self-grant final de Global Admin.
+// CAVEAT: AuditLogs does not directly expose the group's isAssignableToRole.
+// The group is anchored by its known lab name/objectId (role_group_name /
+// role_group_id) and, for generic coverage, by the role it carries. Inheriting
+// PRA on joining the group does NOT generate its own event: the observable
+// signal is the 'Add member to group' (self-add) and, upstream/downstream,
+// the role assignment to the group and the final self-grant of Global Admin.
 //
-// Autor: Caelum Range   Fecha: 2026-11-14
+// Author: Azure Attack Range   Date: 2026-11-14
 // =====================================================================
 
-let lab_prefix      = "caelum";                               // = var.lab_prefix
-let role_group_name = strcat(lab_prefix, "-ap03-role-admins");// grupo role-assignable (botin: porta PRA)
-let role_group_id   = "";                                     // opcional: objectId del grupo (ap03_group_object_id) para alta fidelidad
-let priv_roles      = dynamic([                              // roles de directorio Tier-0 relevantes a la cadena
-      "Privileged Role Administrator",                       // rol que porta el grupo (template e8611ab8-c189-46e8-94e1-60213ab1f814)
-      "Global Administrator",                                // botin final que PRA se auto-concede
+let lab_prefix      = "azrange";                             // = var.lab_prefix
+let role_group_name = strcat(lab_prefix, "-ap03-role-admins");// role-assignable group (loot: carries PRA)
+let role_group_id   = "";                                     // optional: objectId of the group (ap03_group_object_id) for high fidelity
+let priv_roles      = dynamic([                              // Tier-0 directory roles relevant to the chain
+      "Privileged Role Administrator",                       // role carried by the group (template e8611ab8-c189-46e8-94e1-60213ab1f814)
+      "Global Administrator",                                // final loot that PRA self-grants
       "Privileged Authentication Administrator"]);
 let lookback        = 1d;
 let corr_window     = 30m;
 
-// Nota: en 'Add member to group' / 'Add owner to group' el miembro/owner es
-// el TargetResource y el grupo viaja en los modifiedProperties del target
-// (Group.DisplayName / Group.ObjectID) — se extrae con mv-apply mas abajo.
+// Note: in 'Add member to group' / 'Add owner to group' the member/owner is
+// the TargetResource and the group travels in the modifiedProperties of the
+// target (Group.DisplayName / Group.ObjectID) — extracted with mv-apply below.
 // ---------------------------------------------------------------------
-// SENAL A — Etapa 3 (T1098): el OWNER de bajo privilegio se AUTO-ANADE a
-//           la membership del grupo role-assignable privilegiado.
+// SIGNAL A — Stage 3 (T1098): the low-privilege OWNER SELF-ADDS to
+//           the membership of the privileged role-assignable group.
 //   OperationName: 'Add member to group'
-//   Clave de alta fidelidad: InitiatedBy.user == el usuario anadido
-//   (self-add). Un low-priv solo puede hacerlo si es OWNER del grupo.
+//   High-fidelity key: InitiatedBy.user == the added user
+//   (self-add). A low-priv user can only do this if they are OWNER of the group.
 // ---------------------------------------------------------------------
 let SignalA_selfadd =
     AuditLogs
@@ -59,18 +59,18 @@ let SignalA_selfadd =
     | extend InitIp   = tostring(InitiatedBy.user.ipAddress)
     | extend MemberId = tostring(TargetResources[0].id)
     | extend MemberUpn= tostring(TargetResources[0].userPrincipalName)
-    // El grupo afectado viaja en los modifiedProperties del target.
+    // The affected group travels in the modifiedProperties of the target.
     | mv-apply Prop = TargetResources[0].modifiedProperties on (
           summarize GroupName = take_anyif(trim('"', tostring(Prop.newValue)), tostring(Prop.displayName) == "Group.DisplayName"),
                     GroupId   = take_anyif(trim('"', tostring(Prop.newValue)), tostring(Prop.displayName) == "Group.ObjectID")
       )
-    // Filtro al grupo objetivo (por nombre y, si se configura, por objectId).
+    // Filter to the target group (by name and, if configured, by objectId).
     | where GroupName =~ role_group_name or (isnotempty(role_group_id) and GroupId =~ role_group_id)
-    // SELF-ADD: el iniciador es exactamente el miembro anadido.
+    // SELF-ADD: the initiator is exactly the added member.
     | extend IsSelfAdd = (isnotempty(InitId) and InitId =~ MemberId)
     | project TimeGenerated,
               Signal = "A-self-add",
-              Stage  = iff(IsSelfAdd, "T1098 — owner self-add a grupo role-assignable", "T1098 — alta de miembro en grupo role-assignable"),
+              Stage  = iff(IsSelfAdd, "T1098 — owner self-add to role-assignable group", "T1098 — member added to role-assignable group"),
               OperationName,
               Initiator = InitUpn, InitiatorId = InitId, InitiatorIp = InitIp,
               Member = MemberUpn, MemberId,
@@ -79,9 +79,9 @@ let SignalA_selfadd =
               Result;
 
 // ---------------------------------------------------------------------
-// SENAL B — Precondicion / persistencia (T1098): alta de un OWNER sobre el
-//           grupo role-assignable. Es el eslabon mal configurado (delegar
-//           ownership a un low-priv) y tambien una via de persistencia.
+// SIGNAL B — Precondition / persistence (T1098): adding an OWNER to the
+//           role-assignable group. This is the misconfigured link (delegating
+//           ownership to a low-priv) and also a persistence avenue.
 //   OperationName: 'Add owner to group'
 // ---------------------------------------------------------------------
 let SignalB_addowner =
@@ -100,7 +100,7 @@ let SignalB_addowner =
     | where GroupName =~ role_group_name or (isnotempty(role_group_id) and GroupId =~ role_group_id)
     | project TimeGenerated,
               Signal = "B-add-owner",
-              Stage  = "T1098 — owner delegado sobre grupo role-assignable (precondicion/persistencia)",
+              Stage  = "T1098 — delegated owner over role-assignable group (precondition/persistence)",
               OperationName,
               Initiator = InitUpn, InitiatorIp = InitIp,
               Member = NewOwnerUpn, MemberId = NewOwnerId,
@@ -109,10 +109,10 @@ let SignalB_addowner =
               Result;
 
 // ---------------------------------------------------------------------
-// SENAL C — Etapas 2/5 (T1098.003 / T1078.004): asignacion de un ROL de
-//           directorio privilegiado. Cubre (a) la asignacion de PRA AL
-//           GRUPO (provisioning del lab / botin heredado) y (b) el
-//           self-grant final de Global Administrator que ejerce el PRA.
+// SIGNAL C — Stages 2/5 (T1098.003 / T1078.004): assignment of a privileged
+//           directory ROLE. Covers (a) the assignment of PRA TO THE
+//           GROUP (lab provisioning / inherited loot) and (b) the
+//           final self-grant of Global Administrator exercised by PRA.
 //   OperationName: 'Add member to role' / 'Add eligible member to role' /
 //                  'Add member to role in PIM requested (permanent)'
 // ---------------------------------------------------------------------
@@ -128,7 +128,7 @@ let SignalC_roleassign =
     | extend InitUpn  = coalesce(tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName))
     | extend InitId   = tostring(InitiatedBy.user.id)
     | extend InitIp   = tostring(InitiatedBy.user.ipAddress)
-    | extend PrincipalId  = tostring(TargetResources[0].id)        // usuario O grupo al que se asigna el rol
+    | extend PrincipalId  = tostring(TargetResources[0].id)        // user OR group the role is assigned to
     | extend PrincipalUpn = coalesce(tostring(TargetResources[0].userPrincipalName), tostring(TargetResources[0].displayName))
     | extend PrincipalType= tostring(TargetResources[0].type)
     | mv-apply Prop = TargetResources[0].modifiedProperties on (
@@ -138,34 +138,34 @@ let SignalC_roleassign =
     | project TimeGenerated,
               Signal = "C-role-assign",
               Stage  = case(
-                  RoleName =~ "Global Administrator",         "T1078.004 — self-grant de Global Administrator (ejerciendo PRA)",
-                  PrincipalType =~ "Group",                   "T1098.003 — rol privilegiado asignado a GRUPO (herencia por pertenencia)",
-                                                              "T1098.003 — rol privilegiado asignado a principal"),
+                  RoleName =~ "Global Administrator",         "T1078.004 — self-grant of Global Administrator (exercising PRA)",
+                  PrincipalType =~ "Group",                   "T1098.003 — privileged role assigned to a GROUP (inheritance via membership)",
+                                                              "T1098.003 — privileged role assigned to a principal"),
               OperationName,
               Initiator = InitUpn, InitiatorId = InitId, InitiatorIp = InitIp,
               Member = PrincipalUpn, MemberId = PrincipalId,
-              GroupName = RoleName, GroupId = PrincipalType,   // reutiliza columnas para union homogenea
+              GroupName = RoleName, GroupId = PrincipalType,   // reuse columns for a homogeneous union
               IsSelfAdd = (isnotempty(InitId) and InitId =~ PrincipalId),
               Result;
 
 // =====================================================================
-// SALIDA 1 — Timeline unificado de todas las senales AP03.
-// Triage: una fila SENAL A con IsSelfAdd==true sobre el grupo role-admins,
-// precedida por SENAL C (PRA asignado al grupo) y seguida por SENAL C
-// (Global Administrator) del MISMO principal = cadena AP03 completa.
+// OUTPUT 1 — Unified timeline of all AP03 signals.
+// Triage: a SIGNAL A row with IsSelfAdd==true over the role-admins group,
+// preceded by SIGNAL C (PRA assigned to the group) and followed by SIGNAL C
+// (Global Administrator) by the SAME principal = full AP03 chain.
 // =====================================================================
 union isfuzzy=true SignalA_selfadd, SignalB_addowner, SignalC_roleassign
 | sort by TimeGenerated asc
 
 // =====================================================================
-// SALIDA 2 (alta fidelidad) — Correlacion self-add (SENAL A) seguido en
-// corr_window de un self-grant de rol privilegiado (SENAL C) por el MISMO
-// principal. Es exactamente el pivote que la remediacion (no delegar
-// ownership de grupos role-assignable a low-priv) debe hacer imposible.
-// Casi cero falsos positivos. Descomentar para usar como regla de alerta.
+// OUTPUT 2 (high fidelity) — Correlate self-add (SIGNAL A) followed within
+// corr_window by a self-grant of a privileged role (SIGNAL C) by the SAME
+// principal. It is exactly the pivot that remediation (not delegating
+// ownership of role-assignable groups to low-priv) must make impossible.
+// Near-zero false positives. Uncomment to use as an alert rule.
 // =====================================================================
 // SignalA_selfadd
-// | where IsSelfAdd                                   // solo auto-adiciones
+// | where IsSelfAdd                                   // only self-adds
 // | project AddTime = TimeGenerated, Principal = InitiatorId, PrincipalUpn = Initiator, AddIp = InitiatorIp, GroupName
 // | join kind=inner (
 //     SignalC_roleassign

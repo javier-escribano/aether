@@ -14,16 +14,16 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
-    # AP05: archive_file empaqueta el zip de la configuracion DSC.
+    # AP05: archive_file packages the DSC configuration zip.
     archive = {
       source  = "hashicorp/archive"
       version = "~> 2.6"
     }
-    # AP07 (leak_mode="sas"): time_static/time_offset fijan el expiry
-    # (start + sas_expiry_years anios) del SAS filtrado -> idempotencia/reset-safe.
-    # Declarado INCONDICIONALMENTE (los providers no pueden ser condicionales);
-    # solo los recursos time_* van gateados. En leak_mode="account_key" queda
-    # declarado-pero-sin-uso (coste nulo). Precedente: AP05 anadio hashicorp/archive.
+    # AP07 (leak_mode="sas"): time_static/time_offset set the expiry
+    # (start + sas_expiry_years years) of the leaked SAS -> idempotent/reset-safe.
+    # Declared UNCONDITIONALLY (providers cannot be conditional);
+    # only the time_* resources are gated. In leak_mode="account_key" it stays
+    # declared-but-unused (zero cost). Precedent: AP05 added hashicorp/archive.
     time = {
       source  = "hashicorp/time"
       version = "~> 0.12"
@@ -31,7 +31,7 @@ terraform {
   }
 }
 
-# Reutiliza el contexto de `az login --tenant <test>` (ver docs/00-setup.md).
+# Reuses the context from `az login --tenant <test>` (see docs/00-setup.md).
 provider "azuread" {}
 
 provider "azurerm" {

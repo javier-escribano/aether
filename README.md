@@ -1,145 +1,263 @@
-# Caelum Range
+# Azure Attack Range
 
-> Cyber range **Azure + Entra ID + AD híbrido** desplegable como código.
-> Una ruta de ataque, su fix y su detección — en un solo comando, reproducible, destruible.
+> A self-hostable, reproducible **Azure + Entra ID + hybrid Active Directory** cyber range, deployed as code.
+> Every attack path ships with its exploit walkthrough, its remediation, and its detection.
 
-`Caelum` es un nombre de trabajo (cielo/nube en latín). Renómbralo si quieres.
+Azure Attack Range is a training lab for red teamers, blue teamers, and purple teams who want to practise cloud identity attacks and defences in an environment they fully control. Think of it as **GOAD for Azure**: where GOAD gives you a vulnerable on-premises Active Directory forest, this project gives you a deliberately misconfigured Entra ID tenant, Azure subscription, and optional hybrid AD domain controller, all described in Terraform and brought up or torn down with a single command. It is aimed at practitioners preparing for cloud and AD certifications (CARTP, CARTE, CRTO, CRTE), detection engineers who need realistic telemetry, and instructors who need a lab that every student can rebuild identically.
 
----
-
-## Por qué existe (el hueco)
-
-Para on-prem ya tenemos **GOAD**. Para la nube, el material bueno o es de pago (academias) o está fragmentado:
-
-| Proyecto | Cubre | Limitación |
-|----------|-------|------------|
-| **BadZure** (M. Velazco) | Entra ID identity misconfigs | solo identidad, sin Azure resources ni híbrido, sin capa de detección curada |
-| **PurpleCloud** (J. Ostrom) | Azure AD + híbrido pentest lab | orientado a infra, poca guía pedagógica por ruta |
-| **AzureGoat** (INE) | Infra Azure vulnerable (web) | enfoque app web, no identity/red-team path |
-| **XMGoat** | Escenarios de ataque Azure | escenarios sueltos, sin "arregla/detecta" |
-| **SimuLand** (MS) | Detección | foco defensivo, no range de aprendizaje ofensivo |
-
-**Caelum** no reinventa esos — toma sus patrones y los integra en **un único range curado** con tres cosas que ninguno junta:
-
-1. **Un comando** levanta Entra + Azure (+ híbrido opcional) con misconfigs reales activables por *feature flag*.
-2. Cada ruta trae la terna completa **rompe → arregla → detecta** (Sigma + KQL), mapeada a **MITRE ATT&CK** y al temario de certs (CARTP/CARTE/CRTO/CRTE).
-3. **Otros lo clonan y extienden**: `CONTRIBUTING.md` define cómo añadir una ruta nueva en < 1 hora.
+> [!CAUTION]
+> This project deploys **intentionally vulnerable** configurations. Deploy it **only** into a dedicated, throwaway **test** tenant and subscription that you own. **Never** point it at a production or corporate tenant. Read [Safety and cost](#safety-and-cost) and [SECURITY.md](SECURITY.md) before your first deployment.
 
 ---
 
-## ⚠️ Antes de desplegar nada — léelo
+## Table of contents
 
-Esto crea **configuraciones deliberadamente vulnerables**. Trátalas como tóxicas.
+- [Why this is different](#why-this-is-different)
+- [Attack-path catalog](#attack-path-catalog)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Quickstart](#quickstart)
+- [Safety and cost](#safety-and-cost)
+- [Security of the operator](#security-of-the-operator)
+- [Detections](#detections)
+- [Continuous integration](#continuous-integration)
+- [Repository layout](#repository-layout)
+- [Extending the range](#extending-the-range)
+- [Related projects](#related-projects)
+- [Disclaimer](#disclaimer)
 
-- **Tenant dedicado de test. NUNCA el corporativo.** Crea un tenant Entra nuevo y una subscription aislada solo para esto.
-- **Sin datos reales.** Usuarios, correos y secretos son ficticios y sembrados por el range.
-- **Coste:** la capa *identity-only* (AP01, AP03, AP04) es prácticamente gratis (Entra Free). Las VMs del híbrido (AP05/AP06) sí facturan — usa `caelum.ps1 destroy` al terminar y activa *billing alerts* (ver `docs/00-setup.md`).
-- **Teardown siempre disponible:** `caelum.ps1 destroy` elimina todo; `reset` deja la base y quita las vulns.
-- Uso educativo / entrenamiento autorizado en infraestructura propia. Es lo mismo que hacen GOAD/BadZure/AzureGoat.
+---
+
+## Why this is different
+
+Good cloud attack material exists, but it is usually either paid (training academies) or fragmented across single-purpose labs. This range combines three properties that are rarely found together:
+
+1. **The Exploit / Remediate / Detect triad.** Every attack path is documented end to end: how the misconfiguration is abused, how to fix it properly, and how to detect it. Each path is mapped to MITRE ATT&CK techniques and to the relevant certification syllabi.
+2. **Reproducible as code.** The entire environment is Terraform plus a small PowerShell orchestrator. Each vulnerability is an independent feature flag, so you can enable one path, a handful, or all of them, and get the same result every time. `destroy` removes everything.
+3. **Detections included.** Every path ships with a KQL query (for Microsoft Sentinel / Log Analytics) and a Sigma rule, and the infrastructure paths provision the log pipeline they need, so the "Detect" step can be tested without a pre-existing SIEM.
+
+---
+
+## Attack-path catalog
+
+Each path is enabled with its own flag (`enable_ap01` ... `enable_ap08`) in `terraform/terraform.tfvars` and documented in [`docs/attack-paths/`](docs/attack-paths/).
+
+| ID | Attack path | Layer | MITRE ATT&CK | Certs | Cost |
+|----|-------------|-------|--------------|-------|------|
+| [AP01](docs/attack-paths/AP01-illicit-consent.md) | Illicit consent grant leading to Microsoft Graph token theft | Entra | T1528, T1098.003 | CARTP / CARTE | ~0 (Entra Free) |
+| [AP02](docs/attack-paths/AP02-managed-identity.md) | Over-privileged managed identity exposes a Key Vault secret, enabling lateral movement | Azure | T1552.005, T1078.004, T1580, T1098 | CARTP / CARTE | Low (small VM, billed while running) |
+| [AP03](docs/attack-paths/AP03-role-assignable-group.md) | Low-privilege owner of a role-assignable group escalates to Global Administrator | Entra | T1098, T1098.003, T1078.004 | CARTP / CARTE | ~0, **requires Entra ID P1** |
+| [AP04](docs/attack-paths/AP04-app-credential-abuse.md) | App registration owner abuses a privileged service principal's credentials | Entra | T1098.001, T1098.003, T1078.004 | CRTO / CARTE | ~0 (Entra Free) |
+| [AP05](docs/attack-paths/AP05-adcs-esc1.md) | AD CS ESC1 certificate template abuse on a hybrid domain controller | Hybrid | T1649, T1550, T1003.006 | CRTO / CRTE | **Bills compute** (Windows Server VM) |
+| [AP06](docs/attack-paths/AP06-entra-connect-seamless-sso.md) | Entra Connect / Seamless SSO (`AZUREADSSOACC$`): the on-premises to cloud bridge | Hybrid | T1552, T1003.006, T1558.001, T1550 | CARTE / CRTE | **Bills compute** (shares the AP05 VM) |
+| [AP07](docs/attack-paths/AP07-public-storage-leak.md) | Anonymous public storage leaks an over-scoped SAS, exposing a private container | Azure | T1530, T1619, T1552.001 | CARTP | ~0 (storage only) |
+| [AP08](docs/attack-paths/AP08-automation-runbook-rbac.md) | Automation runbook running as an over-privileged managed identity escalates RBAC | Azure | T1651, T1098.003, T1078.004 | CARTP / CARTE | ~0 (no VM) |
+
+**Layers:** *Entra* paths are identity-only; *Azure* paths create subscription resources; *Hybrid* paths deploy a Windows Server 2022 domain controller with AD DS and an Enterprise Root CA. AP05 and AP06 share a single domain controller.
+
+---
+
+## Architecture
+
+```
+            ./azrange.ps1  (deploy | reset | destroy | verify | status)
+                               |
+                 terraform/ (root module, feature flags)
+          ┌────────────────────┼─────────────────────┐
+   entra-identity        azure-resources          hybrid-ad
+   base users/groups     VM, managed identity,    Windows Server 2022 DC,
+   AP01, AP03, AP04      Key Vault, storage,      AD DS, Enterprise Root CA,
+                         Automation               AMA + DCR + Log Analytics
+                         AP02, AP07, AP08         AP05, AP06
+                               |
+                 scripts/  (post-deploy seeds that Terraform cannot express)
+                 detections/  (KQL + Sigma per path)
+```
+
+### Terraform modules
+
+| Module | Scope | Paths |
+|--------|-------|-------|
+| `entra-identity` | Base lab users and groups, app registrations, consent and directory-role configuration | AP01, AP03, AP04 |
+| `azure-resources` | Azure subscription resources: VM, managed identity, Key Vault, storage accounts, Automation Account, diagnostic settings | AP02, AP07, AP08 |
+| `hybrid-ad` | Windows Server 2022 domain controller configured via DSC, AD DS, AD CS, plus an Azure Monitor Agent / data collection rule feeding Log Analytics | AP05, AP06 |
+
+### The feature-flag pattern
+
+Every vulnerability is gated behind a boolean variable (`enable_apXX`). Turning a flag on creates the misconfiguration; turning it off and re-applying removes it. Shared infrastructure is created only when needed: for example, the domain controller exists only when `enable_ap05 || enable_ap06` is true, so disabling both hybrid paths destroys the VM and drops compute cost to zero. Several paths expose additional tuning variables (for example `leak_mode`, `sso_mode`, `runbook_mode`, `mi_role`); see `terraform/terraform.tfvars.example` and the individual path documents.
+
+Where Terraform cannot express a precondition cleanly (tenant consent policy, AD CS templates, objects inside the AD directory), a seed script in `scripts/` applies it after `terraform apply`. Seed scripts that support it also offer a `-Remediate` switch.
+
+### Orchestrator verbs
+
+| Command | What it does |
+|---------|--------------|
+| `./azrange.ps1 deploy` | Runs `terraform apply` with your tfvars and then the seed scripts for the enabled paths. Idempotent. |
+| `./azrange.ps1 verify` | Runs `scripts/verify.ps1`, a health check confirming that each enabled path is in its expected state. |
+| `./azrange.ps1 status` | Shows what is currently deployed. |
+| `./azrange.ps1 reset` | Keeps the base environment but removes the vulnerabilities. |
+| `./azrange.ps1 destroy` | Tears down every resource the range created. |
+
+---
+
+## Prerequisites
+
+### A dedicated test tenant and subscription
+
+- A **new Entra ID tenant created only for this lab** (`<something>.onmicrosoft.com`). Never reuse a corporate or production tenant.
+- A **dedicated Azure subscription** associated with that tenant. Entra Free is sufficient for the identity-only paths; the Azure and hybrid paths require a pay-as-you-go subscription.
+- **AP03 requires Entra ID P1** (role-assignable groups do not exist in Entra Free). A developer or E5 trial tenant works.
+
+### Tooling
+
+| Tool | Version | Install (Windows) |
+|------|---------|-------------------|
+| Azure CLI | current | `winget install -e --id Microsoft.AzureCLI` |
+| Terraform | **>= 1.6** | `winget install -e --id HashiCorp.Terraform` |
+| PowerShell Microsoft.Graph module | current | `Install-Module Microsoft.Graph -Scope CurrentUser` |
+
+### Deployer roles
+
+The identity running `az login` and `terraform apply` needs:
+
+| Paths enabled | Required role(s) |
+|---------------|------------------|
+| Base + AP01 | Directory write access to create users, groups, and apps; the seed requests the Graph scopes listed in [`docs/00-setup.md`](docs/00-setup.md) |
+| AP03, AP04 | **Global Administrator** or **Privileged Role Administrator** in the test tenant (to create role-assignable groups and grant admin consent to role-management permissions) |
+| AP02, AP05, AP06, AP07 | **Contributor** on the test subscription |
+| AP08 | **Contributor** on the subscription, plus an Entra role able to create users (for example User Administrator), plus Owner or User Access Administrator on the AP08 resource group |
+
+The simplest setup is a dedicated lab administrator that is Global Administrator of the test tenant and Owner of the test subscription. Full detail, including the Graph scopes and per-path notes, is in [`docs/00-setup.md`](docs/00-setup.md).
 
 ---
 
 ## Quickstart
 
 ```powershell
-# 1. Requisitos (ver docs/00-setup.md): Azure CLI, Terraform >= 1.6, módulo Microsoft.Graph de PowerShell
-az login --tenant <TU_TENANT_DE_TEST>.onmicrosoft.com
+# 1. Clone
+git clone https://github.com/javier-escribano/azure-attack-range.git
+cd azure-attack-range
 
-# 2. Configura tu despliegue
+# 2. Sign in to your TEST tenant and select your TEST subscription
+az login --tenant <YOUR_TEST_TENANT>.onmicrosoft.com
+az account set --subscription "<TEST_SUBSCRIPTION_ID>"
+
+# 3. Configure the deployment
 cd terraform
-cp terraform.tfvars.example terraform.tfvars   # edita: tenant, dominio, qué rutas activar
-
-# 3. Despliega (idempotente)
+cp terraform.tfvars.example terraform.tfvars
+#    Edit terraform.tfvars: tenant, domain, and which enable_apXX flags to turn on
 cd ..
-./caelum.ps1 deploy
 
-# 4. Comprueba estado
-./caelum.ps1 verify
+# 4. Deploy (idempotent)
+./azrange.ps1 deploy
 
-# 5. Al terminar la sesión de entrenamiento
-./caelum.ps1 destroy
+# 5. Confirm every enabled path is in the expected state
+./azrange.ps1 verify
+
+# 6. When the session is over, tear everything down
+./azrange.ps1 destroy
 ```
+
+> [!TIP]
+> For your first run, enable **only AP01** (`enable_ap01 = true`, all other flags `false`). It is identity-only, costs nothing, and validates the full deploy, verify, and destroy cycle before you spend money on compute.
+
+Then open the document for the path you enabled under [`docs/attack-paths/`](docs/attack-paths/) and work through the Exploit, Remediate, and Detect sections.
 
 ---
 
-## Catálogo de rutas de ataque
+## Safety and cost
 
-Activables por *flag* en `terraform.tfvars`. ✅ = incluida en este esqueleto · 🟡 = scaffolding · ⬜ = roadmap.
+> [!WARNING]
+> **Deploy only into a throwaway test tenant and subscription.** The range creates real, exploitable misconfigurations, including paths to Global Administrator and resource-group Owner. In a production tenant those would be real vulnerabilities.
 
-| ID | Ruta | Capa | Coste | MITRE | Cert |
-|----|------|------|-------|-------|------|
-| **AP01** ✅ | Illicit consent grant → robo de token Graph | Entra | ~0 | T1528, T1098.003 | CARTP/CARTE |
-| **AP02** ✅ | Managed Identity sobre-privilegiada → secreto en Key Vault → lateral | Azure | bajo | T1552.005, T1078.004 | CARTP/CARTE |
-| **AP03** ✅ | Owner de bajo privilegio sobre grupo role-assignable (Privileged Role Administrator) → self-add → Global Admin | Entra | ~0 (P1) | T1098, T1098.003, T1078.004 | CARTP/CARTE |
-| **AP04** ✅ | Owner de bajo privilegio sobre app registration (SP con RoleManagement.ReadWrite.Directory) → add secret → Global Admin | Entra | ~0 | T1098.001, T1098.003, T1078.004 | CRTO/CARTE |
-| **AP05** ✅ | Usuario de bajo privilegio enrola plantilla AD CS ESC1 (enrollee-supplies-subject) → cert con SAN de Domain Admin → PKINIT → DCSync | Híbrido | VM | T1649, T1550, T1003.006 | CRTO/CRTE |
-| **AP06** ✅ | Credencial de sync de Entra Connect (DCSync) → extrae la clave Kerberos nunca-rotada de `AZUREADSSOACC$` → forja un silver ticket de Seamless SSO → autentica a la nube como cualquier usuario sincronizado (bridge on-prem→cloud) | Híbrido | VM | T1552, T1003.006, T1558.001, T1550 | CARTE/CRTE |
-| **AP07** ✅ | Usuario anónimo lista un contenedor público → descarga `backup-config.json` → usa la SAS over-scoped filtrada para leer el contenedor privado (exfiltración de datos) | Azure | ~0 | T1530, T1619, T1552.001 | CARTP |
-| **AP08** ✅ | Low-priv con *Automation Contributor* lanza un runbook que corre como la Managed Identity over-privilegiada del Automation Account → `New-AzRoleAssignment` → Owner del RG | Azure | ~0 | T1651, T1098.003, T1078.004 | CARTP/CARTE |
-
-Cada ruta vive en `docs/attack-paths/APxx-*.md` con la terna **rompe / arregla / detecta**.
+- **Isolation.** Use a tenant and subscription that hold nothing of value. All users, mailboxes, secrets, and data seeded by the range are fictitious. Do not sync the lab AD forest to a real tenant with a real Entra Connect installation.
+- **Network exposure.** The hybrid domain controller opens RDP/WinRM only to `admin_source_cidr` (your own `/32`). Leave it `null` to open no inbound ports and use Azure Bastion or the serial console instead. Never use `0.0.0.0/0`.
+- **Cost.**
+  - AP01, AP03, AP04, AP07, and AP08 cost approximately nothing (identity objects, storage, minimal log ingestion).
+  - AP02 runs a small VM and public IP.
+  - **AP05 and AP06 bill compute**: they run a Windows Server domain controller. The module enables daily auto-shutdown, but you should still destroy it when you are done.
+  - Configure a **budget with alerts** in Cost Management (for example 20 USD/EUR per month with alerts at 50/80/100 percent).
+- **Always run `./azrange.ps1 destroy` when you finish a session.** Disabling a flag and re-deploying also removes that path's resources.
+- **Treat Terraform state as toxic.** `terraform.tfstate` contains **cleartext credentials**: generated domain administrator passwords, lab user passwords, leaked SAS tokens or storage keys, and similar values. Keep it local or in a private, access-controlled backend, never commit it (the shipped `.gitignore` blocks `*.tfstate*` and `terraform.tfvars`; do not remove those entries), and delete it once the lab is destroyed.
 
 ---
 
-## Estructura
+## Security of the operator
+
+> [!IMPORTANT]
+> Running this range puts **you**, the operator, at risk if handled carelessly: the deployer holds highly privileged credentials, the state file holds secrets, and the lab exposes attackable endpoints. Read **[SECURITY.md](SECURITY.md)** for the operator-risk review, the hardening recommendations, and how to report a security issue in the project itself.
+
+---
+
+## Detections
+
+Every attack path ships with detection content in [`detections/`](detections/):
+
+| Format | Location | Use |
+|--------|----------|-----|
+| KQL | `detections/kql/APxx-*.kql` | Microsoft Sentinel / Log Analytics hunting and analytics rules |
+| Sigma | `detections/sigma/APxx-*.yml` | Portable rules you can convert to your SIEM of choice |
+
+Data sources used across the catalog include Entra `AuditLogs` and `SigninLogs`, `AzureActivity`, `StorageBlobLogs`, Automation `JobLogs`/`JobStreams` (`AzureDiagnostics`), and Windows `SecurityEvent` from the domain controller. The infrastructure paths provision the pipeline they need by default (diagnostic settings, Azure Monitor Agent and data collection rule, Log Analytics workspace). Set the corresponding `collect_*` variables to `false`, or set `existing_log_analytics_workspace_id` to your own Sentinel workspace, if you already ingest those logs. Each path document explains what telemetry is in scope and where the lab deliberately stops (for example, cloud-side sign-in logs for AP06 are left for you to hunt in your own tenant).
+
+---
+
+## Continuous integration
+
+The GitHub Actions workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request without any cloud credentials:
+
+- `terraform fmt -check -recursive` for formatting.
+- `terraform init -backend=false -lockfile=readonly` followed by `terraform validate` across a matrix of Terraform versions, using the committed `.terraform.lock.hcl`.
+- An AST parse check of all PowerShell scripts plus a PSScriptAnalyzer pass.
+
+CI validates the code only; it never deploys anything. Validating an actual `apply` requires your own test tenant.
+
+---
+
+## Repository layout
 
 ```
-caelum-range/
-├─ README.md                  ← estás aquí
-├─ caelum.ps1                 ← orquestador: deploy | reset | destroy | verify | status
-├─ .gitignore                 ← bloquea tfstate y secretos (NO lo quites)
-├─ CONTRIBUTING.md            ← cómo añadir una ruta nueva (para que otros extiendan)
+azure-attack-range/
+├─ README.md
+├─ SECURITY.md                  operator-risk review and vulnerability reporting
+├─ CONTRIBUTING.md              how to add a new attack path
+├─ azrange.ps1                  orchestrator: deploy | reset | destroy | verify | status
+├─ .gitignore                   blocks Terraform state and secrets (do not remove)
+├─ .github/workflows/ci.yml     fmt, validate, PowerShell lint
 ├─ docs/
-│  ├─ 00-setup.md             ← requisitos, permisos, control de coste
-│  └─ attack-paths/
-│     ├─ AP01-illicit-consent.md       ← ruta completa de ejemplo (plantilla)
-│     ├─ AP02-managed-identity.md       ← Managed Identity → Key Vault → lateral
-│     ├─ AP03-role-assignable-group.md  ← owner → self-add → PRA → Global Admin
-│     ├─ AP04-app-credential-abuse.md   ← owner de app → add secret → Global Admin
-│     ├─ AP05-adcs-esc1.md              ← AD CS ESC1 → PKINIT como Domain Admin → DCSync (híbrido)
-│     ├─ AP06-entra-connect-seamless-sso.md ← Entra Connect: DCSync AZUREADSSOACC$ → silver ticket Seamless SSO → nube (híbrido)
-│     ├─ AP07-public-storage-leak.md    ← blob público → SAS filtrada → exfil del contenedor privado
-│     └─ AP08-automation-runbook-rbac.md ← runbook como MI over-priv → New-AzRoleAssignment → Owner del RG
+│  ├─ 00-setup.md               prerequisites, permissions, cost control
+│  └─ attack-paths/             AP01 ... AP08, each with Exploit / Remediate / Detect
 ├─ terraform/
 │  ├─ providers.tf  variables.tf  main.tf  outputs.tf
 │  ├─ terraform.tfvars.example
 │  └─ modules/
-│     ├─ entra-identity/      ← base + AP01 (consent) + AP03 (grupo) + AP04 (app reg) por flag
-│     ├─ azure-resources/     ← capa Azure (VM/MI/Key Vault/storage/Automation) + AP02 + AP07 + AP08 por flag; ap07-storage.tf, ap08-automation.tf
-│     └─ hybrid-ad/           ← DC Windows Server 2022 + AD DS + Enterprise Root CA + AMA/DCR; DC compartido (local.need_dc) por AP05 (ESC1) + AP06 (Entra Connect/SSO) por flag; ap06-entra-connect.tf, dsc/CaelumDC.ps1
+│     ├─ entra-identity/        base identities, AP01, AP03, AP04
+│     ├─ azure-resources/       AP02, AP07, AP08
+│     └─ hybrid-ad/             domain controller, AD CS, monitoring, AP05, AP06
 ├─ scripts/
-│  ├─ seed-ap01.ps1           ← lo que Terraform no cubre bien (consents vía Graph)
-│  ├─ seed-ap05.ps1           ← siembra / remedia (-Remediate) la plantilla ESC1 (vía az vm run-command)
-│  ├─ seed-ap06.ps1           ← siembra / remedia AZUREADSSOACC$ + cuenta de sync con DCSync (vía az vm run-command)
-│  └─ verify.ps1              ← health-check del range
+│  ├─ seed-ap01.ps1             tenant consent configuration via Microsoft Graph
+│  ├─ seed-ap05.ps1             AD CS template seed / remediation
+│  ├─ seed-ap06.ps1             Seamless SSO and sync account seed / remediation
+│  └─ verify.ps1                range health check
 └─ detections/
-   ├─ kql/   AP01-illicit-consent.kql · AP02-managed-identity.kql · AP03-role-assignable-group.kql · AP04-app-credential-abuse.kql · AP05-adcs-esc1.kql · AP06-entra-connect-seamless-sso.kql · AP07-public-storage-leak.kql · AP08-automation-runbook-rbac.kql
-   └─ sigma/ AP01-illicit-consent.yml · AP02-managed-identity.yml · AP03-role-assignable-group.yml · AP04-app-credential-abuse.yml · AP05-adcs-esc1.yml · AP06-entra-connect-seamless-sso.yml · AP07-public-storage-leak.yml · AP08-automation-runbook-rbac.yml
+   ├─ kql/                      one .kql per path
+   └─ sigma/                    one .yml per path
 ```
 
 ---
 
-## Estado de este esqueleto
+## Extending the range
 
-Esto es el **andamiaje + las ocho rutas verticales completas: el catálogo entero (AP01 + AP02 + AP03 + AP04 + AP05 + AP06 + AP07 + AP08)**. Lo que ya está:
-
-- Estructura, orquestador, control de coste/seguridad y pauta de contribución.
-- Terraform base de identidad (usuarios/grupos/app) con AP01 activable por flag.
-- AP01 (Entra, ~0 coste) de punta a punta: despliegue → doc rompe/arregla/detecta → KQL + Sigma.
-- AP02 (Azure, coste bajo) de punta a punta: módulo `azure-resources` (VM + MI + Key Vault + storage) → doc → KQL + Sigma.
-- AP03 (Entra, ~0 pero requiere P1) de punta a punta: owner de grupo role-assignable → self-add → Privileged Role Administrator → Global Admin; doc → KQL + Sigma.
-- AP04 (Entra, ~0, Entra Free) de punta a punta: owner de app registration cuyo SP porta RoleManagement.ReadWrite.Directory → add secret → token del SP → Global Admin; doc → KQL + Sigma.
-- AP05 (Híbrido, **factura cómputo**) de punta a punta: módulo `hybrid-ad` (VM Windows Server 2022 + AD DS + Enterprise Root CA) con la plantilla ESC1 `CaelumAuthESC1` sembrada por `seed-ap05.ps1`; usuario de bajo privilegio → cert con SAN de Domain Admin → PKINIT → TGT de DA → DCSync; doc → KQL + Sigma (`SecurityEvent` vía AMA/DCR). **Reset-safe:** `enable_ap05 = false` destruye la VM y con ella la plantilla (reset sin residuo *out-of-state*, tan limpio como AP07/AP08).
-- AP06 (Híbrido, **factura cómputo**) de punta a punta: 2ª ruta híbrida y la que **cierra el catálogo**. **Comparte el DC de AP05** — gate `local.need_dc = enable_ap05 || enable_ap06`, un único DC/CA sirve a ambas (con `enable_ap05 = true` el plan de AP05 es idéntico). `seed-ap06.ps1` siembra la cuenta de máquina `AZUREADSSOACC$` (SPNs de Seamless SSO + clave **nunca-rotada**) y la cuenta de sincronización de Entra Connect con derechos **DCSync**. Cadena **bridge on-prem→cloud** (lo que la distingue de AP05, que acaba on-prem): cred de sync → DCSync de `AZUREADSSOACC$` (T1003.006) → **silver ticket** de Seamless SSO (T1558.001) → autenticación a la **nube** como cualquier usuario sincronizado (T1550); la clave no-rotada = persistencia eterna. Telemetría `SecurityEvent` (4662 DCSync / 4769 / 4741-4742) por el mismo AMA/DCR de AP05 (XPath extendido **solo** con `enable_ap06`); doc → KQL + Sigma. **Reset-safe:** con las dos flags híbridas en false, `need_dc` cae y el DC compartido se destruye (coste → 0); el caso selectivo (AP06 off, AP05 on) se remedia in-place con `seed-ap06.ps1 -Remediate`.
-- AP07 (Azure, **coste ~0**, **100 % declarativa — sin `seed`**) de punta a punta: en el módulo `azure-resources`, `ap07-storage.tf` levanta una storage account con doble puerta anónima (cuenta `allow_nested_items_to_be_public = true` + contenedor `public` tipo `container`); un `backup-config.json` legible sin autenticar filtra una **SAS de cuenta over-scoped** (idempotente vía `hashicorp/time`) hacia el contenedor privado `sensitive-data`. Cadena: enumeración anónima → descarga → SAS → exfil de `customers.csv` (PII sintética). Telemetría `StorageBlobLogs` (diagnostic settings → Log Analytics); doc → KQL + Sigma. **Reset-safe:** `enable_ap07 = false` destruye la cuenta entera (blob filtrado y SAS incluidos).
-- AP08 (Azure, **coste ~0**, **declarativa — sin `seed`**) de punta a punta: en el módulo `azure-resources`, `ap08-automation.tf` crea un Automation Account con **Managed Identity system-assigned over-privilegiada** (`User Access Administrator`/`Owner` sobre el RG) y un atacante low-priv dedicado (`azuread_user` + `Automation Contributor` sobre el RG); el alumno lanza un runbook incrustado (`runbook_mode`: `poc_escalation`/`benign_probe`/`none`) que corre **como la MI** → `New-AzRoleAssignment` → **Owner del RG**. Cadena: Automation Contributor → job como MI (T1651) → self-grant de rol (T1098.003) → Owner (T1078.004). Telemetría `JobLogs`/`JobStreams` (diagnostic setting → Log Analytics) + `AzureActivity`; doc → KQL + Sigma. **Reset-safe (RG-scoped):** `enable_ap08 = false` destruye el RG y con él toda role assignment de runtime scoped al RG (tan limpio como AP05/AP07).
-
-Lo que **tú** iteras después (requiere tu tenant de test para probar `terraform apply`):
-- Validar el `apply` contra un tenant real: AP01 necesita permisos de Graph; AP02 y AP05 necesitan subscription y **facturan cómputo** (AP05 es una VM Windows always-on → disciplina de `destroy`/auto-shutdown + salida 443 a PSGallery para los módulos DSC); AP03 necesita **Entra ID P1**; AP03/AP04 necesitan un deployer con Privileged Role Administrator/Global Admin (para el admin-consent / la asignación de rol); AP07 necesita subscription con rol **Contributor** pero **coste ~0** (storage + ingesta mínima de logs, sin cómputo); AP08 necesita subscription con **Contributor** + permiso para crear el `azuread_user` atacante (rol Entra, p. ej. *User Administrator*) y para asignar RBAC sobre su RG (Owner/UAA del RG), también **coste ~0** y sin cómputo; AP06 **comparte la VM de AP05** (misma factura de cómputo y disciplina de `destroy`/auto-shutdown) y su `seed-ap06.ps1` corre vía `az vm run-command` con la credencial EA del DC.
-- **El catálogo base (AP01–AP08) está completo.** Extiéndelo con rutas nuevas (AP09+) siguiendo `CONTRIBUTING.md` (< 1 h por ruta).
-- Validar el IaC en CI: `terraform fmt -check -recursive` y `terraform init -backend=false && terraform validate` (el repo entero pasa `validate` con Terraform 1.17).
-- Conectar `detections/` a tu Log Analytics / Sentinel.
+The catalog is designed to grow. A new path (AP09 and beyond) consists of a feature flag, the Terraform resources in the appropriate module, an optional seed script, a document under `docs/attack-paths/` following the Exploit / Remediate / Detect template, and a KQL query plus a Sigma rule under `detections/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full checklist, naming conventions, and the requirement that every path be cleanly removable when its flag is turned off.
 
 ---
 
-_Range de entrenamiento. Despliega solo en tenants y subscriptions de test que controles._
+## Related projects
+
+This range builds on ideas from, and is complementary to, other open labs: **GOAD** (on-premises AD), **BadZure** (Entra ID misconfigurations), **PurpleCloud** (Azure AD and hybrid lab infrastructure), **AzureGoat** (vulnerable Azure web infrastructure), **XMGoat** (Azure attack scenarios), and **SimuLand** (detection-focused simulation). Its contribution is to bring identity, Azure resources, and hybrid AD into one curated range where each path carries its own fix and detection.
+
+---
+
+## Disclaimer
+
+Azure Attack Range is provided for **authorized educational, training, and purple-team use only**, on infrastructure you own or are explicitly permitted to test. The techniques documented here are publicly known and are included so that defenders can understand, remediate, and detect them. Do not use this project, or anything learned from it, against systems without authorization. The authors and contributors accept no liability for misuse or for cloud charges incurred by running the lab. Use it only in tenants and subscriptions you control, and destroy it when you are done.

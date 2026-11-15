@@ -1,61 +1,61 @@
 <#
 .SYNOPSIS
-    Completa (o remedia) la condicion vulnerable de AP06 - Entra Connect / Seamless SSO.
+    Completes (or remediates) the AP06 vulnerable condition - Entra Connect / Seamless SSO.
 
 .DESCRIPTION
-    AP06 es la 2a ruta HIBRIDA del catalogo y la que lo CIERRA: el puente
-    on-prem -> cloud. Reusa el MISMO DC hibrido que AP05 (substrato compartido
-    via local.need_dc en Terraform). La DSC base ya levanto el bosque; esta pieza
-    siembra (seed) o neutraliza (-Remediate) los dos artefactos de directorio que
-    habilitan la cadena, que NO son recursos azurerm (como la plantilla ESC1 de
-    AP05, viven en el directorio y se crean imperativamente):
+    AP06 is the 2nd HYBRID attack path in the catalog and the one that CLOSES it: the
+    on-prem -> cloud bridge. It reuses the SAME hybrid DC as AP05 (shared substrate
+    via local.need_dc in Terraform). The base DSC already stood up the forest; this piece
+    seeds (seed) or neutralizes (-Remediate) the two directory artifacts that
+    enable the chain, which are NOT azurerm resources (like the ESC1 template in
+    AP05, they live in the directory and are created imperatively):
 
-      1) AZUREADSSOACC$  -> la cuenta de MAQUINA de Seamless SSO. Su clave
-         Kerberos se COMPARTE con Entra ID. Un cliente pide un TGS para el SPN
-         HTTP/autologon.microsoftazuread-sso.com cifrado con la clave de
-         AZUREADSSOACC$, y Entra lo valida. DEBILIDAD ESTRELLA: la password de
-         AZUREADSSOACC$ NUNCA se rota por defecto (al contrario que las cuentas
-         de maquina normales, que rotan cada 30 dias) -> su hash, robado una vez,
-         vale para SIEMPRE = persistencia eterna. La clave RC4/NT es
-         determinista: MD4(UTF16LE(password)); con una password FIJA/conocida la
-         clave es reproducible y se puede forjar un SILVER TICKET (T1558.001).
+      1) AZUREADSSOACC$  -> the Seamless SSO MACHINE account. Its Kerberos key is
+         SHARED with Entra ID. A client requests a TGS for the SPN
+         HTTP/autologon.microsoftazuread-sso.com encrypted with the AZUREADSSOACC$
+         key, and Entra validates it. HEADLINE WEAKNESS: the AZUREADSSOACC$
+         password NEVER rotates by default (unlike normal machine accounts, which
+         rotate every 30 days) -> its hash, once stolen, is valid FOREVER =
+         eternal persistence. The RC4/NT key is deterministic:
+         MD4(UTF16LE(password)); with a FIXED/known password the key is
+         reproducible and a SILVER TICKET can be forged (T1558.001).
 
-      2) Cuenta de SINCRONIZACION (analoga a MSOL_/Sync_ de Entra Connect) con
-         derechos DCSync sobre el defaultNamingContext. Representa \"has
-         comprometido el servidor Entra Connect y volcado la cred de sync\"
-         (T1552). Con DCSync (T1003.006) el atacante extrae las claves Kerberos
-         de AZUREADSSOACC$ y, con ellas, forja el silver ticket que autentica a
-         la NUBE como cualquier usuario sincronizado SIN su password (T1550).
+      2) SYNC account (analogous to Entra Connect's MSOL_/Sync_) with DCSync
+         rights over the defaultNamingContext. It represents "you have
+         compromised the Entra Connect server and dumped the sync credential"
+         (T1552). With DCSync (T1003.006) the attacker extracts the Kerberos keys
+         of AZUREADSSOACC$ and, with them, forges the silver ticket that
+         authenticates to the CLOUD as any synced user WITHOUT their password (T1550).
 
-    CADENA rompe (lo que diferencia AP06 de AP05, que acaba en DCSync on-prem):
-      cred de sync (T1552) -> DCSync (T1003.006) -> claves de AZUREADSSOACC$
-      -> SILVER TICKET para HTTP/autologon.microsoftazuread-sso.com (T1558.001)
-      -> autenticacion a la NUBE como usuario privilegiado (T1550).
+    Exploit chain (what sets AP06 apart from AP05, which ends at on-prem DCSync):
+      sync cred (T1552) -> DCSync (T1003.006) -> AZUREADSSOACC$ keys
+      -> SILVER TICKET for HTTP/autologon.microsoftazuread-sso.com (T1558.001)
+      -> cloud authentication as a privileged user (T1550).
 
-    Modo por defecto (seed): crea AZUREADSSOACC$ + cuenta de sync con DCSync
-                             segun -SsoMode (idempotente).
-    -Remediate             : rota la clave de AZUREADSSOACC$ DOS veces (fix MS),
-                             quita los ACEs DCSync y deshabilita la cuenta de sync.
+    Default mode (seed): creates AZUREADSSOACC$ + sync account with DCSync
+                         according to -SsoMode (idempotent).
+    -Remediate         : rotates the AZUREADSSOACC$ key TWICE (MS fix),
+                         removes the DCSync ACEs and disables the sync account.
 
     -SsoMode:
-      silver_ticket -> SOLO AZUREADSSOACC$ (+ SPNs, clave fija/no-rotada).
-      sync_dcsync   -> SOLO la cuenta de sync con ACEs DCSync sobre el NC.
-      both          -> ambos (cadena completa; default, honra T1552+T1558).
+      silver_ticket -> ONLY AZUREADSSOACC$ (+ SPNs, fixed/unrotated key).
+      sync_dcsync   -> ONLY the sync account with DCSync ACEs over the NC.
+      both          -> both (full chain; default, honors T1552+T1558).
 
-    CONTEXTO: `az vm run-command` corre como SYSTEM (cuenta de maquina del DC),
-    que NO es Enterprise Admin y NO puede crear la cuenta de maquina de SSO ni
-    escribir el nTSecurityDescriptor del naming context. Este script construye un
-    PSCredential EA (DOMINIO\Administrator) desde -EaPassword y usa -Credential en
-    TODAS las llamadas AD. FALLA RUIDOSAMENTE si no tiene derechos EA.
+    CONTEXT: `az vm run-command` runs as SYSTEM (the DC's machine account),
+    which is NOT Enterprise Admin and CANNOT create the SSO machine account nor
+    write the naming context's nTSecurityDescriptor. This script builds an
+    EA PSCredential (DOMAIN\Administrator) from -EaPassword and uses -Credential on
+    ALL AD calls. FAILS LOUDLY if it lacks EA rights.
 
-    Simetria exacta con seed-ap05.ps1 (SYSTEM->EA, preflight ruidoso, idempotente,
-    -Remediate reset-safe). Toca SOLO estos objetos: NUNCA la CA ni la plantilla
-    ESC1 de AP05 (comparten DC pero no artefactos).
+    Exact symmetry with seed-ap05.ps1 (SYSTEM->EA, loud preflight, idempotent,
+    -Remediate reset-safe). It touches ONLY these objects: NEVER the CA nor the
+    ESC1 template of AP05 (they share the DC but not artifacts).
 
 .NOTES
-    Requiere el modulo ActiveDirectory (RSAT-AD-PowerShell, lo instala la DSC).
-    La habilitacion de auditoria de los EventID 4662/4769/4741/4742 la hace ESTE
-    seed (gated enable_ap06 desde fuera), NO la DSC compartida -> AP05 intacto.
+    Requires the ActiveDirectory module (RSAT-AD-PowerShell, installed by the DSC).
+    Enabling auditing of EventID 4662/4769/4741/4742 is done by THIS seed
+    (gated by enable_ap06 from outside), NOT by the shared DSC -> AP05 intact.
 #>
 [CmdletBinding()]
 param(
@@ -66,9 +66,9 @@ param(
     [ValidateSet('silver_ticket', 'sync_dcsync', 'both')]
     [string]$SsoMode = 'both',
     [string]$SsoAccountName  = 'AZUREADSSOACC',
-    [string]$SyncAccountName = 'Sync_CAELUM',
-    # Passwords conocidas (aterrizan en el estado de Terraform y se pasan aqui).
-    # Obligatorias en modo seed; NO en -Remediate (que genera passwords frescas).
+    [string]$SyncAccountName = 'Sync_AZRANGE',
+    # Known passwords (they land in the Terraform state and are passed here).
+    # Required in seed mode; NOT in -Remediate (which generates fresh passwords).
     [string]$SsoPassword,
     [string]$SyncPassword,
     [string[]]$SsoSpns = @('HTTP/autologon.microsoftazuread-sso.com', 'HTTP/aadg.windows.net.nsatc.net'),
@@ -77,23 +77,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# GUIDs de los extended rights de REPLICACION de directorio. Los DOS juntos = la
-# primitiva DCSync completa; uno solo NO basta para un DCSync funcional.
-#   DS-Replication-Get-Changes      -> leer cambios de replicacion.
-#   DS-Replication-Get-Changes-All  -> incluye los SECRETOS (hashes/claves Kerberos).
+# GUIDs of the directory REPLICATION extended rights. The TWO together = the
+# complete DCSync primitive; one alone is NOT enough for a functional DCSync.
+#   DS-Replication-Get-Changes      -> read replication changes.
+#   DS-Replication-Get-Changes-All  -> includes the SECRETS (hashes/Kerberos keys).
 $REPL_GET_CHANGES     = [guid]'1131f6aa-9c07-11d1-f79f-00c04fc2dcd2'
 $REPL_GET_CHANGES_ALL = [guid]'1131f6ad-9c07-11d1-f79f-00c04fc2dcd2'
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
-# --- Generador de passwords SIN dependencias ($System.Web no se autocarga) ----
-# Windows PowerShell 5.1 (donde corre `az vm run-command`) NO autocarga el
-# ensamblado System.Web, asi que [System.Web.Security.Membership]::GeneratePassword
-# lanza 'Unable to find type' y, con ErrorActionPreference=Stop, ABORTARIA el
-# -Remediate antes de quitar los ACEs DCSync y deshabilitar la cuenta de sync.
-# Este helper no depende de ningun ensamblado externo y garantiza complejidad AD
-# (>=2 de cada categoria, barajadas). La password es de un solo uso: solo sirve
-# para INVALIDAR la clave de AZUREADSSOACC$; nunca necesitamos conocerla.
+# --- Password generator WITHOUT dependencies (System.Web does not auto-load) ---
+# Windows PowerShell 5.1 (where `az vm run-command` runs) does NOT auto-load the
+# System.Web assembly, so [System.Web.Security.Membership]::GeneratePassword
+# throws 'Unable to find type' and, with ErrorActionPreference=Stop, WOULD ABORT the
+# -Remediate before removing the DCSync ACEs and disabling the sync account.
+# This helper depends on no external assembly and guarantees AD complexity
+# (>=2 of each category, shuffled). The password is single-use: it only serves
+# to INVALIDATE the AZUREADSSOACC$ key; we never need to know it.
 function New-ComplexPassword {
     param([int]$Length = 32)
     $upper   = 65..90
@@ -110,54 +110,54 @@ function New-ComplexPassword {
     if ($remaining -gt 0) {
         $chars += 1..$remaining | ForEach-Object { [char]($all | Get-Random) }
     }
-    # Baraja para no dejar las categorias en posiciones fijas.
+    # Shuffle so the categories do not stay in fixed positions.
     -join ($chars | Get-Random -Count $chars.Count)
 }
 
-# --- Credencial EA cualificada (run-command = SYSTEM, no EA) ----------------
-# IMPRESCINDIBLE desde -EaPassword (= dc_admin_password / ap06_dc_admin_password),
-# NO desde SsoPassword: el contexto SYSTEM del run-command no puede crear la cuenta
-# de maquina de SSO ni escribir el descriptor de seguridad del naming context.
+# --- Qualified EA credential (run-command = SYSTEM, not EA) ------------------
+# ESSENTIAL from -EaPassword (= dc_admin_password / ap06_dc_admin_password),
+# NOT from SsoPassword: the run-command's SYSTEM context cannot create the SSO
+# machine account nor write the naming context's security descriptor.
 $sec = ConvertTo-SecureString $EaPassword -AsPlainText -Force
-$EA  = New-Object System.Management.Automation.PSCredential(\"$DomainNetbios\$EaUser\", $sec)
+$EA  = New-Object System.Management.Automation.PSCredential("$DomainNetbios\$EaUser", $sec)
 
 $defaultNC = (Get-ADRootDSE -Server $DomainFqdn -Credential $EA).defaultNamingContext
-$ssoSam    = \"$SsoAccountName`$\"   # sAMAccountName de una cuenta de maquina lleva '$'
+$ssoSam    = "$SsoAccountName`$"   # a machine account's sAMAccountName carries '$'
 
-# --- Preflight: exige derechos EA; falla ruidosamente si SYSTEM/no-EA --------
+# --- Preflight: requires EA rights; fails loudly if SYSTEM/non-EA ------------
 try {
     Get-ADObject -Identity $defaultNC -Server $DomainFqdn -Credential $EA -ErrorAction Stop | Out-Null
 } catch {
-    throw \"[AP06] No puedo leer el naming context '$defaultNC' como '$DomainNetbios\$EaUser'. \" +
-          \"az vm run-command corre como SYSTEM (no EA): pasa EaPassword = password del Administrator \" +
-          \"de DOMINIO (dc_admin_password / ap06_dc_admin_password). Detalle: $($_.Exception.Message)\"
+    throw "[AP06] Cannot read the naming context '$defaultNC' as '$DomainNetbios\$EaUser'. " +
+          "az vm run-command runs as SYSTEM (not EA): pass EaPassword = the DOMAIN Administrator " +
+          "password (dc_admin_password / ap06_dc_admin_password). Detail: $($_.Exception.Message)"
 }
 
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
 function Get-SsoComputer {
-    Get-ADComputer -Filter \"sAMAccountName -eq '$ssoSam'\" -Server $DomainFqdn -Credential $EA `
+    Get-ADComputer -Filter "sAMAccountName -eq '$ssoSam'" -Server $DomainFqdn -Credential $EA `
         -Properties servicePrincipalName, PasswordLastSet -ErrorAction SilentlyContinue
 }
 
 function Get-SyncUser {
-    Get-ADUser -Filter \"sAMAccountName -eq '$SyncAccountName'\" -Server $DomainFqdn -Credential $EA `
+    Get-ADUser -Filter "sAMAccountName -eq '$SyncAccountName'" -Server $DomainFqdn -Credential $EA `
         -Properties SID -ErrorAction SilentlyContinue
 }
 
 # ===========================================================================
-# -Remediate: corta la cadena on-prem->cloud. Cualquiera de los tres cortes
-# basta (defensa en profundidad); aplicamos los tres, reset-safe/idempotente.
+# -Remediate: cuts the on-prem->cloud chain. Any one of the three cuts
+# is enough (defense in depth); we apply all three, reset-safe/idempotent.
 # ===========================================================================
 if ($Remediate) {
-    Write-Host \"[*] Remediando AP06 (Entra Connect / Seamless SSO) ...\" -ForegroundColor Green
+    Write-Host "[*] Remediating AP06 (Entra Connect / Seamless SSO) ..." -ForegroundColor Green
     $didSomething = $false
 
-    # (A) Rotar la clave Kerberos de AZUREADSSOACC$ DOS veces. El fix oficial de
-    # Microsoft es rolar la decryption key de Seamless SSO DOS veces: invalida el
-    # hash ya robado Y los silver tickets ya forjados con la clave anterior. Una
-    # sola rotacion deja una ventana con la clave previa aun aceptada.
+    # (A) Rotate the AZUREADSSOACC$ Kerberos key TWICE. Microsoft's official fix
+    # is to roll the Seamless SSO decryption key TWICE: it invalidates the
+    # already-stolen hash AND the silver tickets already forged with the previous
+    # key. A single rotation leaves a window where the previous key is still accepted.
     $sso = Get-SsoComputer
     if ($sso) {
         foreach ($i in 1, 2) {
@@ -165,14 +165,14 @@ if ($Remediate) {
             Set-ADAccountPassword -Identity $sso.DistinguishedName -Reset `
                 -NewPassword (ConvertTo-SecureString $fresh -AsPlainText -Force) `
                 -Server $DomainFqdn -Credential $EA
-            Write-Host \"[+] Clave de $ssoSam rotada (pase $i/2).\" -ForegroundColor Green
+            Write-Host "[+] $ssoSam key rotated (pass $i/2)." -ForegroundColor Green
         }
         $didSomething = $true
     } else {
-        Write-Host \"[i] $ssoSam no existe: sin clave de Seamless SSO que rotar.\" -ForegroundColor DarkGray
+        Write-Host "[i] $ssoSam does not exist: no Seamless SSO key to rotate." -ForegroundColor DarkGray
     }
 
-    # (B) Quitar los ACEs DCSync de la cuenta de sync sobre el naming context.
+    # (B) Remove the sync account's DCSync ACEs over the naming context.
     $sync = Get-SyncUser
     if ($sync) {
         $sid = New-Object System.Security.Principal.SecurityIdentifier($sync.SID)
@@ -186,120 +186,120 @@ if ($Remediate) {
             if ($sd.RemoveAccessRule($ace)) { $removed = $true }
         }
         if ($removed) {
-            # Mismo gotcha binario que seed-ap05: Set-ADObject espera el descriptor
-            # en su forma NATIVA (octet-string). Pasar el objeto ActiveDirectorySecurity
-            # no serializa fiable y, con ErrorActionPreference=Stop, abortaria.
+            # Same binary gotcha as seed-ap05: Set-ADObject expects the descriptor
+            # in its NATIVE form (octet-string). Passing the ActiveDirectorySecurity
+            # object does not serialize reliably and, with ErrorActionPreference=Stop, would abort.
             Set-ADObject -Identity $defaultNC -Server $DomainFqdn -Credential $EA `
                 -Replace @{ nTSecurityDescriptor = $sd.GetSecurityDescriptorBinaryForm() }
-            Write-Host \"[+] ACEs DCSync (Get-Changes + Get-Changes-All) retirados de $SyncAccountName.\" -ForegroundColor Green
+            Write-Host "[+] DCSync ACEs (Get-Changes + Get-Changes-All) removed from $SyncAccountName." -ForegroundColor Green
         } else {
-            Write-Host \"[i] $SyncAccountName no tenia ACEs DCSync que retirar (idempotente).\" -ForegroundColor DarkGray
+            Write-Host "[i] $SyncAccountName had no DCSync ACEs to remove (idempotent)." -ForegroundColor DarkGray
         }
 
-        # (C) Deshabilitar la cuenta de sync (securizar/decomisionar la cred de
-        # Entra Connect comprometida). Se deshabilita, no se borra, para dejar
-        # rastro forense; cambia a Remove-ADUser si quieres purga total.
+        # (C) Disable the sync account (secure/decommission the compromised Entra
+        # Connect credential). It is disabled, not deleted, to leave a forensic
+        # trail; switch to Remove-ADUser if you want a full purge.
         Disable-ADAccount -Identity $sync.DistinguishedName -Server $DomainFqdn -Credential $EA
-        Write-Host \"[+] Cuenta de sync $SyncAccountName deshabilitada.\" -ForegroundColor Green
+        Write-Host "[+] Sync account $SyncAccountName disabled." -ForegroundColor Green
         $didSomething = $true
     } else {
-        Write-Host \"[i] $SyncAccountName no existe: sin cred de sync que neutralizar.\" -ForegroundColor DarkGray
+        Write-Host "[i] $SyncAccountName does not exist: no sync cred to neutralize." -ForegroundColor DarkGray
     }
 
     if ($didSomething) {
-        Write-Host \"[+] AP06 remediado: clave de Seamless SSO rotada 2x + DCSync fuera + sync deshabilitada.\" -ForegroundColor Green
-        Write-Host \"[i] La cuenta de maquina AZUREADSSOACC$ se conserva (deshabilitarla rompe el SSO real); lo que mata la persistencia es la DOBLE rotacion de su clave.\" -ForegroundColor Cyan
+        Write-Host "[+] AP06 remediated: Seamless SSO key rotated 2x + DCSync removed + sync disabled." -ForegroundColor Green
+        Write-Host "[i] The AZUREADSSOACC$ machine account is kept (disabling it breaks real SSO); what kills the persistence is the DOUBLE rotation of its key." -ForegroundColor Cyan
     } else {
-        Write-Host \"[i] Nada que remediar: ni AZUREADSSOACC$ ni $SyncAccountName presentes.\" -ForegroundColor DarkGray
+        Write-Host "[i] Nothing to remediate: neither AZUREADSSOACC$ nor $SyncAccountName present." -ForegroundColor DarkGray
     }
     return
 }
 
 # ===========================================================================
-# seed (por defecto): siembra los artefactos AP06 segun -SsoMode. Idempotente.
+# seed (default): seeds the AP06 artifacts according to -SsoMode. Idempotent.
 # ===========================================================================
 
-# Habilitacion de auditoria (GATED AQUI, no en la DSC compartida -> AP05 intacto).
-# Las detecciones KQL/Sigma de AP06 dependen de estos EventID; sin la subcategoria
-# activa (y, para 4662, una SACL sobre el NC) las firmas disparan en el vacio.
-# auditpol es idempotente (fijar un valor ya fijado es no-op).
-Write-Host \"[*] Habilitando auditoria para las detecciones de AP06 ...\" -ForegroundColor Yellow
-auditpol /set /subcategory:\"Directory Service Access\"          /success:enable /failure:enable | Out-Null  # 4662 (DCSync)
-auditpol /set /subcategory:\"Kerberos Service Ticket Operations\" /success:enable                 | Out-Null  # 4769 (TGS del SPN SSO)
-auditpol /set /subcategory:\"Computer Account Management\"        /success:enable                 | Out-Null  # 4741/4742 (AZUREADSSOACC$)
-Write-Host \"[+] Auditoria 4662/4769/4741/4742 habilitada.\" -ForegroundColor Yellow
+# Enable auditing (GATED HERE, not in the shared DSC -> AP05 intact).
+# The AP06 KQL/Sigma detections depend on these EventIDs; without the subcategory
+# active (and, for 4662, a SACL on the NC) the signatures fire into the void.
+# auditpol is idempotent (setting an already-set value is a no-op).
+Write-Host "[*] Enabling auditing for the AP06 detections ..." -ForegroundColor Yellow
+auditpol /set /subcategory:"Directory Service Access"          /success:enable /failure:enable | Out-Null  # 4662 (DCSync)
+auditpol /set /subcategory:"Kerberos Service Ticket Operations" /success:enable                 | Out-Null  # 4769 (TGS of the SSO SPN)
+auditpol /set /subcategory:"Computer Account Management"        /success:enable                 | Out-Null  # 4741/4742 (AZUREADSSOACC$)
+Write-Host "[+] Auditing 4662/4769/4741/4742 enabled." -ForegroundColor Yellow
 
 # ---------------------------------------------------------------------------
-# (1) AZUREADSSOACC$ : cuenta de MAQUINA de Seamless SSO (modos silver_ticket|both).
+# (1) AZUREADSSOACC$ : Seamless SSO MACHINE account (modes silver_ticket|both).
 # ---------------------------------------------------------------------------
 if ($SsoMode -eq 'silver_ticket' -or $SsoMode -eq 'both') {
     $sso = Get-SsoComputer
     if ($sso) {
-        Write-Host \"[i] $ssoSam ya existe: seed idempotente, no recreo.\" -ForegroundColor DarkGray
-        # Garantizar los SPNs aunque la cuenta ya existiera (idempotente).
+        Write-Host "[i] $ssoSam already exists: idempotent seed, not recreating." -ForegroundColor DarkGray
+        # Ensure the SPNs even if the account already existed (idempotent).
         foreach ($spn in $SsoSpns) {
             if ($sso.servicePrincipalName -notcontains $spn) {
                 Set-ADComputer -Identity $sso.DistinguishedName -ServicePrincipalNames @{ Add = $spn } `
                     -Server $DomainFqdn -Credential $EA
-                Write-Host \"[+] SPN anadido a $ssoSam : $spn\" -ForegroundColor Yellow
+                Write-Host "[+] SPN added to $ssoSam : $spn" -ForegroundColor Yellow
             }
         }
     } else {
         if (-not $SsoPassword) {
-            throw \"[AP06] Modo '$SsoMode' requiere -SsoPassword (la password FIJA/conocida de $ssoSam). \" +
-                  \"Debe venir del output sensible ap06_sso_password.\"
+            throw "[AP06] Mode '$SsoMode' requires -SsoPassword (the FIXED/known password of $ssoSam). " +
+                  "It must come from the sensitive output ap06_sso_password."
         }
-        Write-Host \"[*] Sembrando la cuenta de Seamless SSO $ssoSam ...\" -ForegroundColor Yellow
+        Write-Host "[*] Seeding the Seamless SSO account $ssoSam ..." -ForegroundColor Yellow
 
-        # La password es conocida/fija -> su clave Kerberos RC4/NT es determinista
-        # (MD4(UTF16LE(pwd))) y por tanto reproducible para forjar el silver ticket.
-        # Lo \"no-rotado\" es ESTRUCTURAL: ninguna entidad rota AZUREADSSOACC$, asi que
-        # su PasswordLastSet se queda fijo/antiguo = la firma de la no-rotacion.
-        # Es un objeto COMPUTER (sAMAccountName AZUREADSSOACC$), NO un usuario.
+        # The password is known/fixed -> its RC4/NT Kerberos key is deterministic
+        # (MD4(UTF16LE(pwd))) and therefore reproducible to forge the silver ticket.
+        # The "unrotated" aspect is STRUCTURAL: no entity rotates AZUREADSSOACC$, so
+        # its PasswordLastSet stays fixed/old = the signature of the non-rotation.
+        # It is a COMPUTER object (sAMAccountName AZUREADSSOACC$), NOT a user.
         $ssoSec = ConvertTo-SecureString $SsoPassword -AsPlainText -Force
         New-ADComputer -Name $SsoAccountName -SAMAccountName $ssoSam `
             -ServicePrincipalNames $SsoSpns `
             -AccountPassword $ssoSec -PasswordNeverExpires:$true -Enabled $true `
-            -Description 'Seamless SSO computer account (Caelum Range AP06; clave NO rotada por diseno)' `
+            -Description 'Seamless SSO computer account (Azure Attack Range AP06; key NOT rotated by design)' `
             -Server $DomainFqdn -Credential $EA
 
         $spnList = $SsoSpns -join ', '
-        Write-Host \"[+] $ssoSam creada con SPNs: $spnList (clave fija/no-rotada -> silver ticket forjable).\" -ForegroundColor Yellow
+        Write-Host "[+] $ssoSam created with SPNs: $spnList (fixed/unrotated key -> forgeable silver ticket)." -ForegroundColor Yellow
     }
 }
 
 # ---------------------------------------------------------------------------
-# (2) Cuenta de SINCRONIZACION con DCSync (modos sync_dcsync|both).
+# (2) SYNC account with DCSync (modes sync_dcsync|both).
 # ---------------------------------------------------------------------------
 if ($SsoMode -eq 'sync_dcsync' -or $SsoMode -eq 'both') {
     $sync = Get-SyncUser
     if ($sync) {
-        Write-Host \"[i] $SyncAccountName ya existe: seed idempotente, no recreo.\" -ForegroundColor DarkGray
+        Write-Host "[i] $SyncAccountName already exists: idempotent seed, not recreating." -ForegroundColor DarkGray
     } else {
         if (-not $SyncPassword) {
-            throw \"[AP06] Modo '$SsoMode' requiere -SyncPassword (la password de la cuenta de sync). \" +
-                  \"Debe venir del output sensible ap06_sync_password.\"
+            throw "[AP06] Mode '$SsoMode' requires -SyncPassword (the sync account password). " +
+                  "It must come from the sensitive output ap06_sync_password."
         }
-        Write-Host \"[*] Sembrando la cuenta de sincronizacion $SyncAccountName ...\" -ForegroundColor Yellow
+        Write-Host "[*] Seeding the synchronization account $SyncAccountName ..." -ForegroundColor Yellow
         $syncSec = ConvertTo-SecureString $SyncPassword -AsPlainText -Force
         New-ADUser -Name $SyncAccountName -SamAccountName $SyncAccountName `
             -AccountPassword $syncSec -Enabled $true -PasswordNeverExpires $true `
-            -Description 'Entra Connect sync account (Caelum Range AP06; DCSync on-prem)' `
+            -Description 'Entra Connect sync account (Azure Attack Range AP06; on-prem DCSync)' `
             -Server $DomainFqdn -Credential $EA
-        Write-Host \"[+] $SyncAccountName creada.\" -ForegroundColor Yellow
+        Write-Host "[+] $SyncAccountName created." -ForegroundColor Yellow
         $sync = Get-SyncUser
     }
 
-    # Conceder DCSync = ACEs DS-Replication-Get-Changes (+ -All) sobre el NC RAIZ
-    # (defaultNamingContext, NO el config NC: el config NC seria otra cosa). Los
-    # DOS extended rights son necesarios para un DCSync funcional (el segundo trae
-    # los secretos). Guardas if-contains => idempotente.
+    # Grant DCSync = DS-Replication-Get-Changes (+ -All) ACEs over the ROOT NC
+    # (defaultNamingContext, NOT the config NC: the config NC would be something else). The
+    # TWO extended rights are needed for a functional DCSync (the second brings
+    # the secrets). if-contains guards => idempotent.
     $sid = New-Object System.Security.Principal.SecurityIdentifier($sync.SID)
     $obj = Get-ADObject -Identity $defaultNC -Server $DomainFqdn -Credential $EA -Properties nTSecurityDescriptor
     $sd  = $obj.nTSecurityDescriptor
-    # Las ACEs leidas de nTSecurityDescriptor exponen IdentityReference como
-    # SecurityIdentifier, no como NTAccount: normalizamos AMBOS lados a SID para
-    # que el re-run detecte las ACEs ya presentes (idempotencia real = no-op).
+    # The ACEs read from nTSecurityDescriptor expose IdentityReference as a
+    # SecurityIdentifier, not as an NTAccount: we normalize BOTH sides to SID so
+    # a re-run detects the ACEs already present (true idempotency = no-op).
     $existing = $sd.Access | Where-Object {
         $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
         ($_.ActiveDirectoryRights -band [System.DirectoryServices.ActiveDirectoryRights]::ExtendedRight) -and
@@ -317,16 +317,16 @@ if ($SsoMode -eq 'sync_dcsync' -or $SsoMode -eq 'both') {
         }
     }
     if ($added) {
-        # Mismo gotcha binario que seed-ap05: escribir el descriptor en su forma
-        # NATIVA (octet-string), no el objeto ActiveDirectorySecurity.
+        # Same binary gotcha as seed-ap05: write the descriptor in its NATIVE
+        # form (octet-string), not the ActiveDirectorySecurity object.
         Set-ADObject -Identity $defaultNC -Server $DomainFqdn -Credential $EA `
             -Replace @{ nTSecurityDescriptor = $sd.GetSecurityDescriptorBinaryForm() }
-        Write-Host \"[+] DCSync concedido a $SyncAccountName sobre $defaultNC (Get-Changes + Get-Changes-All).\" -ForegroundColor Yellow
+        Write-Host "[+] DCSync granted to $SyncAccountName over $defaultNC (Get-Changes + Get-Changes-All)." -ForegroundColor Yellow
     } else {
-        Write-Host \"[i] $SyncAccountName ya tenia ambos ACEs DCSync (idempotente).\" -ForegroundColor DarkGray
+        Write-Host "[i] $SyncAccountName already had both DCSync ACEs (idempotent)." -ForegroundColor DarkGray
     }
 }
 
-Write-Host \"`n[+] AP06 sembrado (modo=$SsoMode). Cadena: cred de sync -> DCSync -> claves de $ssoSam -> silver ticket -> NUBE.\" -ForegroundColor Green
-Write-Host \"[i] Ruta en docs/attack-paths/AP06-entra-connect-seamless-sso.md\" -ForegroundColor Cyan
-Write-Host \"[i] Arregla in-place: seed-ap06.ps1 -Remediate (rota la clave de $ssoSam 2x + quita DCSync + deshabilita sync).\" -ForegroundColor Cyan
+Write-Host "`n[+] AP06 seeded (mode=$SsoMode). Chain: sync cred -> DCSync -> $ssoSam keys -> silver ticket -> CLOUD." -ForegroundColor Green
+Write-Host "[i] Attack path in docs/attack-paths/AP06-entra-connect-seamless-sso.md" -ForegroundColor Cyan
+Write-Host "[i] In-place remediation: seed-ap06.ps1 -Remediate (rotates the $ssoSam key 2x + removes DCSync + disables sync)." -ForegroundColor Cyan

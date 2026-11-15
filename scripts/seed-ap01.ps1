@@ -1,21 +1,21 @@
 <#
 .SYNOPSIS
-    Completa (o remedia) la condición vulnerable de AP01 — illicit consent grant.
+    Completes (or remediates) the AP01 vulnerable condition - illicit consent grant.
 
 .DESCRIPTION
-    Terraform crea el app "NewsletterSync" con scopes delegados peligrosos, pero la
-    pieza que lo hace explotable es la POLÍTICA DE CONSENTIMIENTO del tenant:
+    Terraform creates the "NewsletterSync" app with dangerous delegated scopes, but the
+    piece that makes it exploitable is the tenant's CONSENT POLICY:
 
-      Vulnerable  -> cualquier usuario puede consentir cualquier app (policy legacy).
-      Seguro      -> el consentimiento de usuario queda deshabilitado (requiere admin).
+      Vulnerable  -> any user can consent to any app (legacy policy).
+      Safe        -> user consent is disabled (requires admin).
 
-    Modo por defecto  : deja el tenant en estado vulnerable.
-    -Remediate        : restaura el estado seguro (lo usa `caelum.ps1 reset`).
-    -PreConsent       : además pre-crea el grant delegado para un usuario víctima,
-                        para demostrar el abuso de token sin repetir el phishing de consent.
+    Default mode  : leaves the tenant in the vulnerable state.
+    -Remediate    : restores the safe state (used by `azrange.ps1 reset`).
+    -PreConsent   : additionally pre-creates the delegated grant for a victim user,
+                    to demonstrate token abuse without repeating the consent phishing.
 
 .NOTES
-    Requiere el módulo Microsoft.Graph. Scopes: Policy.ReadWrite.Authorization,
+    Requires the Microsoft.Graph module. Scopes: Policy.ReadWrite.Authorization,
     DelegatedPermissionGrant.ReadWrite.All, Application.Read.All.
 #>
 [CmdletBinding()]
@@ -28,7 +28,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Policy que representa "permitir consentimiento de usuario a todas las apps" (estado permisivo legacy).
+# Policy that represents "allow user consent to all apps" (legacy permissive state).
 $LegacyUserConsent = 'ManagePermissionGrantsForSelf.microsoft-user-default-legacy'
 
 Import-Module Microsoft.Graph.Identity.SignIns -ErrorAction Stop
@@ -41,23 +41,23 @@ Connect-MgGraph -Scopes @(
 ) -NoWelcome
 
 if ($Remediate) {
-    Write-Host '[*] Remediando: deshabilitando el consentimiento de usuario...' -ForegroundColor Green
+    Write-Host '[*] Remediating: disabling user consent...' -ForegroundColor Green
     Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
-        PermissionGrantPoliciesAssigned = @()   # vacío = ningún usuario puede consentir
+        PermissionGrantPoliciesAssigned = @()   # empty = no user can consent
     }
-    Write-Host '[+] user-consent deshabilitado. AP01 remediado.' -ForegroundColor Green
+    Write-Host '[+] user-consent disabled. AP01 remediated.' -ForegroundColor Green
     return
 }
 
-Write-Host '[*] Sembrando estado VULNERABLE: permitiendo consentimiento de usuario a todas las apps...' -ForegroundColor Yellow
+Write-Host '[*] Seeding VULNERABLE state: allowing user consent to all apps...' -ForegroundColor Yellow
 Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
     PermissionGrantPoliciesAssigned = @($LegacyUserConsent)
 }
-Write-Host "[+] Policy permisiva aplicada. App vulnerable: $AppId" -ForegroundColor Yellow
+Write-Host "[+] Permissive policy applied. Vulnerable app: $AppId" -ForegroundColor Yellow
 
 if ($PreConsent) {
-    if (-not $VictimUpn) { throw '-PreConsent requiere -VictimUpn <usuario@tenant>.' }
-    Write-Host "[*] Pre-consintiendo el app en nombre de $VictimUpn ..." -ForegroundColor Yellow
+    if (-not $VictimUpn) { throw '-PreConsent requires -VictimUpn <user@tenant>.' }
+    Write-Host "[*] Pre-consenting the app on behalf of $VictimUpn ..." -ForegroundColor Yellow
 
     $sp     = Get-MgServicePrincipal -Filter "appId eq '$AppId'"
     $graph  = Get-MgServicePrincipal -Filter "appId eq '00000003-0000-0000-c000-000000000000'"
@@ -70,7 +70,7 @@ if ($PreConsent) {
         resourceId  = $graph.Id
         scope       = 'offline_access Mail.Read Files.Read.All'
     } | Out-Null
-    Write-Host '[+] Grant delegado creado: el token del app ya puede leer correo/ficheros de la víctima.' -ForegroundColor Yellow
+    Write-Host '[+] Delegated grant created: the app token can now read the victim''s mail/files.' -ForegroundColor Yellow
 }
 
-Write-Host "`n[i] Ruta en docs/attack-paths/AP01-illicit-consent.md" -ForegroundColor Cyan
+Write-Host "`n[i] Attack path in docs/attack-paths/AP01-illicit-consent.md" -ForegroundColor Cyan

@@ -1,129 +1,129 @@
 # ==================================================================
-# AP04 — App registration con permiso de APLICACION peligroso de
-# Microsoft Graph + owner de bajo privilegio (abuso de credenciales /
-# persistencia de service principal).
+# AP04 — App registration with a dangerous Microsoft Graph APPLICATION
+# permission + low-privilege owner (credential abuse / service
+# principal persistence).
 #
-# Nucleo 100% DECLARATIVO (sin seed, needs_seed=none). La combinacion
-# vulnerable son tres hechos que fija Terraform:
-#   (a) azuread_user.lab[0] (caelum-user1), usuario de BAJO privilegio,
-#       es el UNICO owner del app registration (owners = [...]) -> por
-#       defecto en Entra, el owner de una app puede ANADIR credenciales
-#       (client secret / certificado) a esa app,
-#   (b) el service principal de la app porta el app role (permiso de
-#       APLICACION, app-only) de Graph RoleManagement.ReadWrite.Directory,
-#       concedido con ADMIN CONSENT via azuread_app_role_assignment, y
-#   (c) ese app role es Tier-0: GARANTIZA escalada a Global Administrator
-#       de un solo salto (SpecterOps lo documenta como uno de los dos
-#       unicos app roles de Graph que lo garantizan; el otro es
+# 100% DECLARATIVE core (no seed, needs_seed=none). The vulnerable
+# combination is three facts that Terraform sets:
+#   (a) azuread_user.lab[0] (azrange-user1), a LOW-privilege user, is
+#       the ONLY owner of the app registration (owners = [...]) -> by
+#       default in Entra, an app owner can ADD credentials (client
+#       secret / certificate) to that app,
+#   (b) the app's service principal carries the Graph app role
+#       (APPLICATION permission, app-only) RoleManagement.ReadWrite.Directory,
+#       granted with ADMIN CONSENT via azuread_app_role_assignment, and
+#   (c) that app role is Tier-0: it GUARANTEES single-hop escalation to
+#       Global Administrator (SpecterOps documents it as one of the only
+#       two Graph app roles that guarantee it; the other is
 #       AppRoleAssignment.ReadWrite.All).
 #
-# El PASO DE EXPLOTACION NO se siembra: es comportamiento POR DEFECTO de
-# Entra. El owner anade un secret a la app (az ad app credential reset
-# --append / Add-MgApplicationPassword), se autentica como el SP via
-# OAuth2 client_credentials -> token app-only de Graph que porta
-# RoleManagement.ReadWrite.Directory, y POST
-# /roleManagement/directory/roleAssignments se auto-asigna Global
+# The EXPLOITATION STEP is NOT seeded: it is DEFAULT Entra behavior. The
+# owner adds a secret to the app (az ad app credential reset --append /
+# Add-MgApplicationPassword), authenticates as the SP via OAuth2
+# client_credentials -> an app-only Graph token carrying
+# RoleManagement.ReadWrite.Directory, and POST
+# /roleManagement/directory/roleAssignments assigns themselves Global
 # Administrator (roleDefinitionId 62e90394-69f5-4237-9190-012177145e10,
-# directoryScopeId '/'). El secret anadido queda como BACKDOOR app-only
-# persistente (sobrevive a reset de contrasena del user y a MFA; los SP
-# no la aplican). Es la arista canonica AZOwns -> app registration ->
-# AZMGRoleManagement_ReadWrite_Directory de BloodHound/AzureHound.
+# directoryScopeId '/'). The added secret remains as a persistent
+# app-only BACKDOOR (it survives the user's password reset and MFA; SPs
+# do not enforce it). This is the canonical AZOwns -> app registration ->
+# AZMGRoleManagement_ReadWrite_Directory edge from BloodHound/AzureHound.
 #
 # MITRE ATT&CK: T1098.001 (Account Manipulation: Additional Cloud
-# Credentials) -NUCLEO- -> T1098.003 (Additional Cloud Roles) ->
+# Credentials) -CORE- -> T1098.003 (Additional Cloud Roles) ->
 # T1078.004 (Valid Accounts: Cloud Accounts). Recon: T1087.004.
 #
-# CONTRASTE con AP03 (misma clase, distinto objeto): AP03 = ownership de
-# un GRUPO role-assignable (herencia de rol de directorio); AP04 =
-# ownership de una APP REGISTRATION (abuso del permiso de aplicacion de
-# Graph + credenciales). Ambos son ownership abuse Tier-0.
+# CONTRAST with AP03 (same class, different object): AP03 = ownership of
+# a role-assignable GROUP (directory role inheritance); AP04 = ownership
+# of an APP REGISTRATION (abuse of the Graph application permission +
+# credentials). Both are Tier-0 ownership abuse.
 #
-# PRECONDICIONES (de permisos de deploy, NO de estado vulnerable magico):
-#   - PERMISOS DE DEPLOY: RoleManagement.ReadWrite.Directory tiene
-#     AdminConsentRequired=Yes. El principal que ejecuta `terraform apply`
-#     debe poseer Global Administrator o Privileged Role Administrator (y
-#     el app-role RoleManagement.ReadWrite.Directory sobre el deployer)
-#     para conceder ese admin-consent declarativamente. Application
-#     Administrator + Cloud Application Administrator NO bastan para
-#     consentir este permiso sensible de gestion de roles.
-#   - LICENCIA: identity-only, coste $ ~0; Entra Free basta para la app +
-#     SP (a diferencia de AP03, que exige P1 para el grupo role-assignable).
-#   - LATENCIA: tras el admin-consent / alta de credencial puede haber
-#     propagacion de directorio -> reintentar la emision del token app-only
-#     (anotado en la doc 'Rompe').
+# PRECONDITIONS (deploy permissions, NOT a magic vulnerable state):
+#   - DEPLOY PERMISSIONS: RoleManagement.ReadWrite.Directory has
+#     AdminConsentRequired=Yes. The principal running `terraform apply`
+#     must hold Global Administrator or Privileged Role Administrator (and
+#     the RoleManagement.ReadWrite.Directory app role on the deployer) to
+#     grant that admin-consent declaratively. Application Administrator +
+#     Cloud Application Administrator are NOT enough to consent to this
+#     sensitive role-management permission.
+#   - LICENSE: identity-only, cost ~$0; Entra Free is enough for the app +
+#     SP (unlike AP03, which requires P1 for the role-assignable group).
+#   - LATENCY: after the admin-consent / credential creation there may be
+#     directory propagation -> retry the app-only token issuance (noted
+#     in the 'Exploit' doc).
 #
-# TEARDOWN: `./caelum.ps1 reset` re-aplica con enable_ap04=false
-# (count = 0) -> destruye app + SP + app_role_assignment. El client
-# secret/cert que el alumno anade out-of-band y los objetos creados tras
-# escalar a GA quedan FUERA del estado de Terraform y se limpian a mano
-# (mismo caveat de scope out-of-state que AP02/AP03).
+# TEARDOWN: `./azrange.ps1 reset` re-applies with enable_ap04=false
+# (count = 0) -> destroys app + SP + app_role_assignment. The client
+# secret/cert that the student adds out-of-band and the objects created
+# after escalating to GA stay OUTSIDE the Terraform state and are cleaned
+# up by hand (same out-of-state scope caveat as AP02/AP03).
 #
-# NOTA documental (variantes Tier-0 equivalentes, no implementadas aqui;
-# ver docs/attack-paths): AppRoleAssignment.ReadWrite.All
-# (06b708a9-e830-4db3-a914-8e69da51d44f, se auto-promociona concediendose
-# otros app roles) y Application.ReadWrite.All
-# (1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9, persistencia de credenciales en
-# otras apps).
+# Documentation note (equivalent Tier-0 variants, not implemented here;
+# see docs/attack-paths): AppRoleAssignment.ReadWrite.All
+# (06b708a9-e830-4db3-a914-8e69da51d44f, self-promotes by granting itself
+# other app roles) and Application.ReadWrite.All
+# (1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9, credential persistence in
+# other apps).
 # ==================================================================
 
 locals {
-  # App role (permiso de APLICACION / app-only) de Microsoft Graph que
-  # porta el SP de la app vulnerable = botin de la cadena. Tier-0:
-  # permite asignar CUALQUIER rol de directorio, Global Administrator
-  # incluido. GUID = variante Application de RoleManagement.ReadWrite.Directory
-  # (la delegada es d01b97e9-cbc0-49fe-810a-750afd5527a3; ambas
-  # AdminConsentRequired=Yes). resource_app_id de Graph se reutiliza de
-  # local.graph_app_id (definido en main.tf) para no duplicar el local.
+  # Microsoft Graph app role (APPLICATION / app-only permission) carried
+  # by the vulnerable app's SP = loot of the chain. Tier-0: lets you
+  # assign ANY directory role, Global Administrator included. GUID =
+  # Application variant of RoleManagement.ReadWrite.Directory (the
+  # delegated one is d01b97e9-cbc0-49fe-810a-750afd5527a3; both
+  # AdminConsentRequired=Yes). Graph's resource_app_id is reused from
+  # local.graph_app_id (defined in main.tf) to avoid duplicating the local.
   ap04_graph_app_role_id   = "9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8"
   ap04_graph_app_role_name = "RoleManagement.ReadWrite.Directory"
 }
 
-# Service principal de Microsoft Graph en ESTE tenant. Es el `resource`
-# sobre el que se concede el app role (el destinatario del admin-consent).
+# Microsoft Graph service principal in THIS tenant. It is the `resource`
+# the app role is granted on (the recipient of the admin-consent).
 data "azuread_service_principal" "msgraph" {
   client_id = local.graph_app_id
 }
 
-# ---- App registration vulnerable (nombre senuelo tipo conector de
-# sincronizacion de directorio) ------------------------------------
+# ---- Vulnerable app registration (decoy name resembling a directory
+# sync connector) --------------------------------------------------
 resource "azuread_application" "ap04_app" {
   count            = var.enable_ap04 ? 1 : 0
   display_name     = "${var.lab_prefix}-ap04-GraphSyncEngine"
   sign_in_audience = "AzureADMyOrg"
 
-  # MISCONFIG (eslabon mal configurado): el usuario de bajo privilegio
-  # caelum-user1 es el UNICO owner. Por defecto, un owner de la app puede
-  # ANADIR credenciales (secret/cert) a ESA app -> primitivo explotable.
+  # MISCONFIG (the misconfigured link): the low-privilege user
+  # azrange-user1 is the ONLY owner. By default, an app owner can ADD
+  # credentials (secret/cert) to THAT app -> exploitable primitive.
   owners = [azuread_user.lab[0].object_id]
 
-  # Permiso de APLICACION (type="Role", app-only) de Graph. El consent
-  # real se materializa con el azuread_app_role_assignment de abajo; este
-  # bloque declara la intencion en el manifiesto de la app.
+  # Graph APPLICATION permission (type="Role", app-only). The actual
+  # consent is materialized by the azuread_app_role_assignment below;
+  # this block declares the intent in the app manifest.
   required_resource_access {
     resource_app_id = local.graph_app_id
 
     resource_access {
       id   = local.ap04_graph_app_role_id
-      type = "Role" # aplicacion (app-only), NO delegado
+      type = "Role" # application (app-only), NOT delegated
     }
   }
 }
 
-# Service principal de la app vulnerable: es el principal que porta el
-# app role y como quien se autentica el atacante (client_credentials).
-# owner inline = caelum-user1 (angulo de persistencia; azuread NO expone
-# un recurso azuread_service_principal_owner, los owners van en `owners`).
+# Service principal of the vulnerable app: it is the principal that carries
+# the app role and the one the attacker authenticates as (client_credentials).
+# inline owner = azrange-user1 (persistence angle; azuread does NOT expose
+# an azuread_service_principal_owner resource, owners go in `owners`).
 resource "azuread_service_principal" "ap04_app" {
   count     = var.enable_ap04 ? 1 : 0
   client_id = azuread_application.ap04_app[0].client_id
   owners    = [azuread_user.lab[0].object_id]
 }
 
-# ADMIN-CONSENT DECLARATIVO: concede el app role de Graph al SP de la app
-# vulnerable. ESTE recurso ES el admin-consent del permiso de aplicacion,
-# expresado como codigo (necesita Global Administrator / Privileged Role
-# Administrator en el deployer; ver cabecera). Es lo que convierte el
-# alta-de-secret del owner en escalada a Global Administrator.
+# DECLARATIVE ADMIN-CONSENT: grants the Graph app role to the SP of the
+# vulnerable app. THIS resource IS the admin-consent of the application
+# permission, expressed as code (needs Global Administrator / Privileged
+# Role Administrator on the deployer; see header). It is what turns the
+# owner's secret-creation into escalation to Global Administrator.
 resource "azuread_app_role_assignment" "ap04_rmrwd" {
   count               = var.enable_ap04 ? 1 : 0
   app_role_id         = local.ap04_graph_app_role_id
@@ -131,19 +131,19 @@ resource "azuread_app_role_assignment" "ap04_rmrwd" {
   resource_object_id  = data.azuread_service_principal.msgraph.object_id
 }
 
-# NOTA: el client secret / certificado NO se crea en Terraform a
-# proposito. Sembrarlo falsearia el lab: el alta-de-credencial-por-owner
-# es el PRIMITIVO EXPLOTABLE (default de Entra) que ejecuta el alumno
-# (az ad app credential reset --id <appId> --append /
-# Add-MgApplicationPassword). Si se quisiera demostrar el secret ya
-# materializado (p.ej. para una captura), descomentar:
+# NOTE: the client secret / certificate is NOT created in Terraform on
+# purpose. Seeding it would falsify the lab: the owner-adds-a-credential
+# step is the EXPLOITABLE PRIMITIVE (Entra default) that the student
+# runs (az ad app credential reset --id <appId> --append /
+# Add-MgApplicationPassword). To demonstrate the secret already
+# materialized (e.g. for a screenshot), uncomment:
 #
 # resource "azuread_application_password" "ap04_backdoor" {
 #   count             = var.enable_ap04 ? 1 : 0
 #   application_id    = azuread_application.ap04_app[0].id
-#   display_name      = "caelum-ap04-owner-backdoor"
-#   end_date_relative = "17520h" # ~2 anos (TTL del atacante). NO usar
-#   # timeadd(timestamp(), ...): timestamp() se reevalua en CADA plan ->
-#   # diff perpetuo / recreacion de la credencial. end_date_relative lo
-#   # calcula el provider una sola vez en create (sin drift).
+#   display_name      = "azrange-ap04-owner-backdoor"
+#   end_date_relative = "17520h" # ~2 years (attacker TTL). Do NOT use
+#   # timeadd(timestamp(), ...): timestamp() is re-evaluated on EVERY plan
+#   # -> perpetual diff / credential recreation. end_date_relative is
+#   # computed by the provider once at create time (no drift).
 # }

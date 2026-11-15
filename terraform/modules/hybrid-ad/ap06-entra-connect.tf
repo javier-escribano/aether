@@ -1,29 +1,29 @@
 # ==================================================================
-# AP06 - Entra Connect / Seamless SSO (AZUREADSSOACC$): puente on-prem->cloud.
+# AP06 - Entra Connect / Seamless SSO (AZUREADSSOACC$): on-prem->cloud bridge.
 #
-# 2a ruta HIBRIDA del range y la que CIERRA el catalogo. Substrato COMPARTIDO
-# con AP05 (local.need_dc en main.tf): un unico DC/CA sirve a ambas. Los
-# artefactos AD de AP06 (la cuenta de maquina AZUREADSSOACC$ con sus SPNs +
-# la cuenta de sincronizacion con ACEs DCSync sobre el naming context) NO son
-# recursos azurerm (viven en el directorio del DC, como la plantilla ESC1 de
-# AP05): los siembra scripts/seed-ap06.ps1 (imperativo, post-apply, via
-# az vm run-command). Aqui solo viven los SECRETOS (que aterrizan en el ESTADO
-# y se exponen via outputs sensibles); need_dc y los xpath_* viven en
-# main.tf/monitoring.tf; los outputs ap06_* en outputs.tf.
+# The range's 2nd HYBRID path and the one that CLOSES the catalog. SHARED
+# substrate with AP05 (local.need_dc in main.tf): a single DC/CA serves both.
+# The AP06 AD artifacts (the AZUREADSSOACC$ machine account with its SPNs +
+# the synchronization account with DCSync ACEs over the naming context) are NOT
+# azurerm resources (they live in the DC's directory, like the AP05 ESC1
+# template): they are seeded by scripts/seed-ap06.ps1 (imperative, post-apply, via
+# az vm run-command). Only the SECRETS live here (they land in STATE and are
+# exposed via sensitive outputs); need_dc and the xpath_* live in
+# main.tf/monitoring.tf; the ap06_* outputs in outputs.tf.
 #
-# LECCION ESTRELLA (distinta de AP05, que acaba en DCSync on-prem): el
-# compromiso on-prem SALTA a la nube. Con la credencial de la cuenta de sync
-# (DCSync) se extraen las claves Kerberos de AZUREADSSOACC$; se forja un SILVER
-# TICKET para HTTP/autologon.microsoftazuread-sso.com suplantando a cualquier
-# usuario sincronizado; Entra lo valida -> autenticacion a la NUBE sin password.
-# La clave de AZUREADSSOACC$ NUNCA se rota por defecto -> persistencia eterna.
+# KEY LESSON (different from AP05, which ends in on-prem DCSync): the on-prem
+# compromise JUMPS to the cloud. With the sync account credential (DCSync)
+# you extract the Kerberos keys of AZUREADSSOACC$; you forge a SILVER
+# TICKET for HTTP/autologon.microsoftazuread-sso.com impersonating any
+# synchronized user; Entra validates it -> authentication to the CLOUD without a password.
+# The key of AZUREADSSOACC$ NEVER rotates by default -> eternal persistence.
 # ==================================================================
 
-# Password FIJA/conocida de AZUREADSSOACC$. Su clave Kerberos RC4 = MD4(UTF16LE(pwd))
-# es reproducible, y la cuenta no tiene host que la rote -> "nunca rotada". Lo
-# "no-rotado" es estructural (ninguna entidad rota AZUREADSSOACC$), no que la
-# clave sea debil: se genera aleatoriamente (nunca hardcode) pero LA CONOCEMOS
-# (aterriza en el estado y se expone via output sensible para el forge).
+# FIXED/known password of AZUREADSSOACC$. Its RC4 Kerberos key = MD4(UTF16LE(pwd))
+# is reproducible, and the account has no host to rotate it -> "never rotated". The
+# "non-rotated" property is structural (no entity rotates AZUREADSSOACC$), not that the
+# key is weak: it is generated randomly (never hardcoded) but WE KNOW IT
+# (it lands in state and is exposed via a sensitive output for the forge).
 resource "random_password" "ap06_sso" {
   count            = var.enable_ap06 ? 1 : 0
   length           = 24
@@ -34,8 +34,8 @@ resource "random_password" "ap06_sso" {
   override_special = "!#$%*()-_=+"
 }
 
-# Password de la cuenta de sincronizacion (credencial de Entra Connect con
-# derechos DCSync): la credencial de arranque del atacante de AP06.
+# Password of the synchronization account (Entra Connect credential with
+# DCSync rights): the attacker's starting credential for AP06.
 resource "random_password" "ap06_sync" {
   count            = var.enable_ap06 ? 1 : 0
   length           = 24

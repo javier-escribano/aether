@@ -1,9 +1,9 @@
 # ------------------------------------------------------------------
-# Caelum Range — orquestación de módulos
+# Azure Attack Range — module orchestration
 # ------------------------------------------------------------------
-# Patrón: un módulo por DOMINIO (identidad / recursos Azure / híbrido).
-# Las vulnerabilidades son FEATURE FLAGS dentro del módulo que corresponda,
-# no módulos sueltos. Así `reset` = poner el flag a false y re-aplicar.
+# Pattern: one module per DOMAIN (identity / Azure resources / hybrid).
+# Vulnerabilities are FEATURE FLAGS inside the module they belong to,
+# not standalone modules. So `reset` = set the flag to false and re-apply.
 # ------------------------------------------------------------------
 
 module "entra_identity" {
@@ -13,50 +13,50 @@ module "entra_identity" {
   tenant_domain = var.tenant_domain
   user_count    = var.user_count
 
-  # Rutas que viven en la capa de identidad
+  # Attack paths that live in the identity layer
   enable_ap01 = var.enable_ap01
   enable_ap03 = var.enable_ap03
   enable_ap04 = var.enable_ap04
 }
 
 # ------------------------------------------------------------------
-# Capa de recursos Azure (AP02 + AP07 + AP08).
-#   AP02 factura cómputo (VM) → `destroy` al terminar.
-#   AP07 es coste ~0 (storage + unos KB de blobs + ingesta mínima), SIN VM.
-#   AP08 es coste ~0 (Automation Account + runtime gratuito de job), SIN VM.
+# Azure resource layer (AP02 + AP07 + AP08).
+#   AP02 bills compute (VM) → `destroy` when done.
+#   AP07 is ~zero cost (storage + a few KB of blobs + minimal ingestion), NO VM.
+#   AP08 is ~zero cost (Automation Account + free job runtime), NO VM.
 # ------------------------------------------------------------------
 module "azure_resources" {
   source = "./modules/azure-resources"
 
   lab_prefix = var.lab_prefix
   location   = var.location
-  # tenant_domain: lo usa AP08 para el UPN del azuread_user atacante (Approach A).
+  # tenant_domain: used by AP08 for the UPN of the attacker azuread_user (Approach A).
   tenant_domain = var.tenant_domain
 
-  # Rutas que viven en la capa de recursos Azure
+  # Attack paths that live in the Azure resource layer
   enable_ap02 = var.enable_ap02
 
-  # AP07 — Public storage / SAS leak (coste ~0, sin VM)
+  # AP07 — Public storage / SAS leak (~zero cost, no VM)
   enable_ap07          = var.enable_ap07
   leak_mode            = var.leak_mode
   collect_storage_logs = var.collect_storage_logs
 
-  # AP08 — Automation Account runbook → escalada RBAC (coste ~0, sin VM)
+  # AP08 — Automation Account runbook → RBAC escalation (~zero cost, no VM)
   enable_ap08             = var.enable_ap08
   runbook_mode            = var.runbook_mode
   mi_role                 = var.mi_role
   collect_automation_logs = var.collect_automation_logs
 
-  # LAW compartido con AP05: si se da, el módulo no crea workspace propio
-  # (lo reutilizan el diagnostic setting de AP07 y el de AP08).
+  # LAW shared with AP05: if provided, the module does not create its own workspace
+  # (reused by the AP07 and AP08 diagnostic settings).
   existing_log_analytics_workspace_id = var.existing_log_analytics_workspace_id
 }
 
 # ------------------------------------------------------------------
-# Capa híbrida (AP05 — AD CS ESC1; AP06 — Entra Connect / Seamless SSO).
-# OJO: factura cómputo (DC Windows always-on, el AP más caro). AP05 y AP06
-# COMPARTEN el mismo DC (local.need_dc): si ambas flags off → count=0 →
-# destruye la VM entera (reset + coste→0); si una está on, el DC sirve a ambas.
+# Hybrid layer (AP05 — AD CS ESC1; AP06 — Entra Connect / Seamless SSO).
+# NOTE: bills compute (always-on Windows DC, the most expensive AP). AP05 and AP06
+# SHARE the same DC (local.need_dc): if both flags are off → count=0 →
+# destroys the entire VM (reset + cost→0); if one is on, the DC serves both.
 # ------------------------------------------------------------------
 module "hybrid_ad" {
   source = "./modules/hybrid-ad"
@@ -64,7 +64,7 @@ module "hybrid_ad" {
   lab_prefix = var.lab_prefix
   location   = var.location
 
-  # AP05 — AD CS ESC1 (híbrido on-prem)
+  # AP05 — AD CS ESC1 (hybrid on-prem)
   enable_ap05                         = var.enable_ap05
   dc_admin_password                   = var.dc_admin_password
   admin_source_cidr                   = var.admin_source_cidr
@@ -73,9 +73,9 @@ module "hybrid_ad" {
   collect_security_events             = var.collect_security_events
   existing_log_analytics_workspace_id = var.existing_log_analytics_workspace_id
 
-  # AP06 — Entra Connect / Seamless SSO (reusa el DC de AP05 vía need_dc).
-  # domain_fqdn/domain_netbios ya se heredan (domain_netbios usa el default
-  # 'CAELUM' del módulo, igual que AP05).
+  # AP06 — Entra Connect / Seamless SSO (reuses the AP05 DC via need_dc).
+  # domain_fqdn/domain_netbios are already inherited (domain_netbios uses the module
+  # default 'AZRANGE', same as AP05).
   enable_ap06       = var.enable_ap06
   sso_mode          = var.sso_mode
   sso_account_name  = var.sso_account_name

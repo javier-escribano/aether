@@ -1,81 +1,81 @@
-# AP01 — Illicit consent grant → robo de token Graph
+# AP01 — Illicit consent grant → Graph token theft
 
-- **Capa:** Entra ID
-- **Coste:** ~0 (identity-only, Entra Free)
+- **Layer:** Entra ID
+- **Cost:** ~0 (identity-only, Entra Free)
 - **MITRE ATT&CK:** [T1528](https://attack.mitre.org/techniques/T1528/) (Steal Application Access Token) · [T1098.003](https://attack.mitre.org/techniques/T1098/003/) (Additional Cloud Roles / app abuse)
-- **Mapea a cert:** CARTP / CARTE
-- **Precondición sembrada por el range:**
-  - App multi-tenant `caelum-ap01-NewsletterSync` que pide scopes delegados peligrosos (`Mail.Read`, `Files.Read.All`, `offline_access`).
-  - User-consent policy **permisiva** (cualquier usuario puede consentir cualquier app) — aplicada por `scripts/seed-ap01.ps1`.
+- **Maps to cert:** CARTP / CARTE
+- **Precondition seeded by the range:**
+  - Multi-tenant app `azrange-ap01-NewsletterSync` requesting dangerous delegated scopes (`Mail.Read`, `Files.Read.All`, `offline_access`).
+  - **Permissive** user-consent policy (any user can consent to any app) — applied by `scripts/seed-ap01.ps1`.
 
 ---
 
-## 🎯 Objetivo didáctico
+## 🎯 Learning objective
 
-Que el alumno entienda por qué **el consentimiento de usuario es una superficie de acceso inicial y de persistencia**, no un detalle de UX: un token delegado obtenido por consentimiento sobrevive a cambios de contraseña y a MFA, y no aparece como "inicio de sesión" clásico.
+Help the student understand why **user consent is both an initial-access and a persistence surface**, not a UX detail: a delegated token obtained through consent survives password changes and MFA, and does not show up as a classic "sign-in".
 
 ---
 
-## 🔴 Rompe (cómo se explota)
+## 🔴 Exploit (how it is abused)
 
-Flujo clásico de *consent phishing* (nivel entrenamiento; herramientas públicas de referencia: **GraphRunner**, **365-Stealer**, **TokenTactics**):
+Classic *consent phishing* flow (training level; public reference tooling: **GraphRunner**, **365-Stealer**, **TokenTactics**):
 
-1. **Despliega el range con AP01 activo** y recupera la URL de consentimiento:
+1. **Deploy the range with AP01 enabled** and retrieve the consent URL:
    ```powershell
-   ./caelum.ps1 deploy
+   ./azrange.ps1 deploy
    cd terraform; terraform output -raw ap01_consent_url
    ```
-   La URL apunta al endpoint legítimo `login.microsoftonline.com` del tenant — por eso es creíble.
+   The URL points to the tenant's legitimate `login.microsoftonline.com` endpoint — which is exactly what makes it credible.
 
-2. **La víctima consiente.** En el range haces de víctima abriendo esa URL con un `caelum-userN`.
-   Como la policy es permisiva, Entra **no exige aprobación de admin** y registra el grant.
-   > Atajo para demo sin repetir el consent a mano:
-   > `./scripts/seed-ap01.ps1 -AppId <appId> -PreConsent -VictimUpn caelum-user1@<tenant>`
+2. **The victim consents.** In the range you play the victim by opening that URL as an `azrange-userN`.
+   Because the policy is permissive, Entra **does not require admin approval** and records the grant.
+   > Shortcut for a demo without re-doing the consent by hand:
+   > `./scripts/seed-ap01.ps1 -AppId <appId> -PreConsent -VictimUpn azrange-user1@<tenant>`
 
-3. **Canje code→token.** El atacante intercambia el `code` del redirect por un *access token* + *refresh token* contra `/oauth2/v2.0/token`. El refresh token es la joya: renueva acceso de forma persistente.
+3. **code→token exchange.** The attacker swaps the redirect's `code` for an *access token* + *refresh token* against `/oauth2/v2.0/token`. The refresh token is the prize: it renews access persistently.
 
-4. **Abuso vía Graph.** Con el token, lee el correo y los ficheros de la víctima:
+4. **Abuse via Graph.** With the token, read the victim's mail and files:
    ```
    GET https://graph.microsoft.com/v1.0/me/messages
    GET https://graph.microsoft.com/v1.0/me/drive/root/children
    ```
-   Objetivo de aprendizaje: observar que **no hay un sign-in interactivo nuevo** por cada acceso — solo refresh de token.
+   Learning goal: observe that **there is no new interactive sign-in** for each access — only token refresh.
 
 ---
 
-## 🟢 Arregla (remediación)
+## 🟢 Remediate (remediation)
 
-La corrección es de política, no del app. El range la aplica con `./caelum.ps1 reset` (o el script en modo `-Remediate`):
+The fix is a policy change, not an app change. The range applies it with `./azrange.ps1 reset` (or the script in `-Remediate` mode):
 
 ```powershell
-# Deshabilita el consentimiento de usuario: solo un admin puede consentir apps.
+# Disable user consent: only an admin can consent to apps.
 Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
     PermissionGrantPoliciesAssigned = @()
 }
 ```
 
-Alternativa recomendada en producción (no bloquear del todo, sino **consentimiento acotado**):
+Recommended alternative in production (don't block entirely, but **scope the consent**):
 - Portal → *Enterprise applications* → *Consent and permissions* → **"Allow user consent for apps from verified publishers, for selected permissions"**.
-- Activar el **admin consent workflow** para que el usuario pueda *solicitar* y un admin apruebe.
-- Revisar grants existentes: `Get-MgOauth2PermissionGrant` y revocar los sospechosos.
+- Enable the **admin consent workflow** so a user can *request* and an admin approves.
+- Review existing grants: `Get-MgOauth2PermissionGrant` and revoke any suspicious ones.
 
 ---
 
-## 🔵 Detecta
+## 🔵 Detect
 
-El evento delator está en los **Entra ID Audit Logs**: `Consent to application` / `Add delegated permission grant`, filtrando por scopes de alto valor.
+The tell-tale event is in the **Entra ID Audit Logs**: `Consent to application` / `Add delegated permission grant`, filtered by high-value scopes.
 
 - KQL (Sentinel / Defender XDR): [`detections/kql/AP01-illicit-consent.kql`](../../detections/kql/AP01-illicit-consent.kql)
 - Sigma: [`detections/sigma/AP01-illicit-consent.yml`](../../detections/sigma/AP01-illicit-consent.yml)
 
-Señales de caza complementarias:
-- App **multi-tenant recién creada** que pide `Mail.*` / `Files.*` / `offline_access`.
-- Grant con `consentType = Principal` (consentimiento de un único usuario, típico del phishing dirigido).
-- Acceso a Graph **sin sign-in interactivo** correlacionado (solo refresh tokens).
+Complementary hunting signals:
+- **Newly created multi-tenant app** requesting `Mail.*` / `Files.*` / `offline_access`.
+- Grant with `consentType = Principal` (consent from a single user, typical of targeted phishing).
+- Graph access **with no correlated interactive sign-in** (refresh tokens only).
 
 ---
 
-## 📚 Referencias
+## 📚 References
 
 - Microsoft — [Investigate risky OAuth apps / illicit consent grant](https://learn.microsoft.com/en-us/defender-cloud-apps/investigate-risky-oauth)
 - Microsoft — [Configure how users consent to applications](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/configure-user-consent)

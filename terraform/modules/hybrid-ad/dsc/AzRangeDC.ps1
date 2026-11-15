@@ -1,28 +1,28 @@
 <#
-    CaelumDC.ps1 - Configuracion DSC de la BASE BENIGNA de AP05.
+    AzRangeDC.ps1 - DSC configuration of the AP05 BENIGN BASE.
 
-    Levanta SOLO la base: bosque AD DS de usar-y-tirar + Enterprise Root CA
-    + usuario low-priv + auditoria CA/Kerberos + StrongCertificateBinding
-    (KB5014754) en modo Compatibility. NO crea la plantilla ESC1: esa la
-    siembra scripts/seed-ap05.ps1 (seed | -Remediate) via az vm run-command,
-    con simetria exacta a seed-ap01.ps1.
+    Brings up ONLY the base: throwaway AD DS forest + Enterprise Root CA
+    + low-priv user + CA/Kerberos auditing + StrongCertificateBinding
+    (KB5014754) in Compatibility mode. Does NOT create the ESC1 template: that is
+    seeded by scripts/seed-ap05.ps1 (seed | -Remediate) via az vm run-command,
+    in exact symmetry with seed-ap01.ps1.
 
-    Reboot-aware: el LCM posee el reboot de DCPromo (RebootNodeIfNeeded +
-    ActionAfterReboot='ContinueConfiguration') y REANUDA la config tras
-    reiniciar; la extension DSC solo reporta success cuando TODO (incluido
-    AD CS post-reboot y la auditoria) queda Compliant.
+    Reboot-aware: the LCM owns the DCPromo reboot (RebootNodeIfNeeded +
+    ActionAfterReboot='ContinueConfiguration') and RESUMES the config after
+    rebooting; the DSC extension only reports success when EVERYTHING (including
+    post-reboot AD CS and the auditing) is Compliant.
 
-    Credenciales: llegan cifradas por protected_settings.configurationArguments
-    de la extension. El configurationData (PSDscAllowDomainUser/PlainText) lo
-    aporta la extension como blob aparte.
+    Credentials: arrive encrypted via protected_settings.configurationArguments
+    of the extension. The configurationData (PSDscAllowDomainUser/PlainText) is
+    supplied by the extension as a separate blob.
 #>
 
 # ------------------------------------------------------------------
-# Bootstrap de modulos DSC (corre al COMPILAR la MOF en la VM).
-# REQUIERE salida 443 a PSGallery en el deploy. Fallback air-gap: bakear
-# ActiveDirectoryDsc/ActiveDirectoryCSDsc dentro del zip (Publish-AzVMDsc
-# Configuration o commitear los arboles de modulo) y quitar este bloque.
-# Pins (reproducibilidad; un modulo sin pin es un failure mode conocido).
+# DSC module bootstrap (runs when COMPILING the MOF on the VM).
+# REQUIRES outbound 443 to PSGallery at deploy. Air-gap fallback: bake
+# ActiveDirectoryDsc/ActiveDirectoryCSDsc into the zip (Publish-AzVMDsc
+# Configuration or commit the module trees) and remove this block.
+# Pins (reproducibility; an unpinned module is a known failure mode).
 # ------------------------------------------------------------------
 $ErrorActionPreference = 'Stop'
 
@@ -38,7 +38,7 @@ if (-not (Get-Module -ListAvailable -Name ActiveDirectoryCSDsc | Where-Object { 
     Install-Module -Name ActiveDirectoryCSDsc -RequiredVersion 5.0.0 -Force -AllowClobber | Out-Null
 }
 
-Configuration CaelumDC {
+Configuration AzRangeDC {
     param(
         [Parameter(Mandatory = $true)] [string]       $DomainFqdn,
         [Parameter(Mandatory = $true)] [string]       $DomainNetbios,
@@ -46,7 +46,7 @@ Configuration CaelumDC {
         [Parameter(Mandatory = $true)] [pscredential] $SafemodeCredential,
         [Parameter(Mandatory = $true)] [pscredential] $LowPrivCredential,
         [string] $LowPrivUser           = 'ap05user',
-        [string] $CaCommonName          = 'caelum-CA',
+        [string] $CaCommonName          = 'azrange-CA',
         [string] $StrongCertBindingMode = '1'
     )
 
@@ -54,8 +54,8 @@ Configuration CaelumDC {
     Import-DscResource -ModuleName ActiveDirectoryDsc   -ModuleVersion '6.6.0'
     Import-DscResource -ModuleName ActiveDirectoryCSDsc -ModuleVersion '5.0.0'
 
-    # Credencial de dominio CUALIFICADA para la CA enterprise (exige Enterprise
-    # Admin; el built-in Administrator lo es en el dominio raiz del bosque).
+    # QUALIFIED domain credential for the enterprise CA (requires Enterprise
+    # Admin; the built-in Administrator is one in the forest root domain).
     $domainCred = New-Object System.Management.Automation.PSCredential(
         "$DomainNetbios\$($AdminCredential.UserName)", $AdminCredential.Password)
 
@@ -67,18 +67,18 @@ Configuration CaelumDC {
             ConfigurationMode  = 'ApplyOnly'
         }
 
-        # 1) Roles. ADCS-Cert-Authority se instala ya (la CONFIGURACION de la
-        #    CA ocurre post-promocion, en AdcsCertificationAuthority).
+        # 1) Roles. ADCS-Cert-Authority is installed now (the CA CONFIGURATION
+        #    happens post-promotion, in AdcsCertificationAuthority).
         WindowsFeature DNS       { Name = 'DNS';                 Ensure = 'Present' }
         WindowsFeature ADDS      { Name = 'AD-Domain-Services';  Ensure = 'Present'; DependsOn = '[WindowsFeature]DNS' }
         WindowsFeature RSATADPS  { Name = 'RSAT-AD-PowerShell';  Ensure = 'Present' }
         WindowsFeature ADCS      { Name = 'ADCS-Cert-Authority'; Ensure = 'Present' }
         WindowsFeature RSATADCS  { Name = 'RSAT-ADCS-Mgmt';      Ensure = 'Present' }
 
-        # 2) El built-in Administrator (RID 500) perdura como EA tras DCPromo;
-        #    el admin SAM 'caelumadmin' DESAPARECE (los DC no tienen cuentas
-        #    locales salvo DSRM). Set+enable con dc_admin_password ANTES de
-        #    promover, para que el seed autentique luego como DOMINIO\Administrator.
+        # 2) The built-in Administrator (RID 500) persists as EA after DCPromo;
+        #    the SAM admin 'azrangeadmin' DISAPPEARS (DCs have no local accounts
+        #    except DSRM). Set+enable with dc_admin_password BEFORE promoting,
+        #    so the seed later authenticates as DOMAIN\Administrator.
         User BuiltinAdmin {
             UserName             = 'Administrator'
             Password             = $AdminCredential
@@ -88,7 +88,7 @@ Configuration CaelumDC {
             DependsOn            = '[WindowsFeature]ADDS'
         }
 
-        # 3) Nuevo bosque. Credential = Administrator local (se convierte en DA).
+        # 3) New forest. Credential = local Administrator (becomes DA).
         ADDomain Forest {
             DomainName                    = $DomainFqdn
             DomainNetbiosName             = $DomainNetbios
@@ -99,14 +99,14 @@ Configuration CaelumDC {
             DependsOn                     = '[User]BuiltinAdmin'
         }
 
-        # Robustez post-reboot: no sigas hasta que el dominio responda.
+        # Post-reboot robustness: do not proceed until the domain responds.
         WaitForADDomain WaitForest {
             DomainName = $DomainFqdn
             DependsOn  = '[ADDomain]Forest'
         }
 
-        # 4) Usuario low-priv (credencial de arranque del atacante). Solo Domain
-        #    Users; NO se siembra ninguna credencial de DA (el DA se forja).
+        # 4) Low-priv user (attacker's starting credential). Domain Users
+        #    only; NO DA credential is seeded (the DA is forged).
         ADUser LowPriv {
             DomainName           = $DomainFqdn
             UserName             = $LowPrivUser
@@ -117,7 +117,7 @@ Configuration CaelumDC {
             DependsOn            = '[WaitForADDomain]WaitForest'
         }
 
-        # 5) Enterprise Root CA (requiere dominio + credencial EA cualificada).
+        # 5) Enterprise Root CA (requires domain + qualified EA credential).
         AdcsCertificationAuthority CA {
             IsSingleInstance = 'Yes'
             CAType           = 'EnterpriseRootCA'
@@ -127,9 +127,9 @@ Configuration CaelumDC {
             DependsOn        = '[WaitForADDomain]WaitForest', '[WindowsFeature]ADCS'
         }
 
-        # 6) Auditoria de la CA (4886/4887/4899/4900). Sin AuditFilter+auditpol
-        #    la CA NO audita y la pata Detecta dispara en vacio. Lo hace la BASE
-        #    (no el seed) para que persista entre ciclos seed/-Remediate.
+        # 6) CA auditing (4886/4887/4899/4900). Without AuditFilter+auditpol
+        #    the CA does NOT audit and the Detect leg fires on nothing. Done by the
+        #    BASE (not the seed) so it persists across seed/-Remediate cycles.
         Script CaAudit {
             GetScript  = { @{ Result = ((certutil -getreg CA\AuditFilter) 2>$null | Out-String) } }
             TestScript = {
@@ -144,7 +144,7 @@ Configuration CaelumDC {
             DependsOn = '[AdcsCertificationAuthority]CA'
         }
 
-        # 7) Auditoria Kerberos (4768 con Certificate Information en PKINIT).
+        # 7) Kerberos auditing (4768 with Certificate Information in PKINIT).
         Script KerberosAudit {
             GetScript  = { @{ Result = ((auditpol /get /subcategory:"Kerberos Authentication Service") | Out-String) } }
             TestScript = {
@@ -157,10 +157,10 @@ Configuration CaelumDC {
             DependsOn = '[WaitForADDomain]WaitForest'
         }
 
-        # 8) KB5014754: Compatibility (1) para que ESC1 sea explotable como se
-        #    ensena. Full Enforcement (2, default si no se configura post-feb-2025)
-        #    lee la SID extension y RECHAZA el SAN forjado -> parece 'ya parcheado'
-        #    (de hecho, es el fix real). Control ensenable; la base NO corre
+        # 8) KB5014754: Compatibility (1) so ESC1 is exploitable as taught.
+        #    Full Enforcement (2, the default if not configured after Feb 2025)
+        #    reads the SID extension and REJECTS the forged SAN -> looks 'already patched'
+        #    (in fact, it is the real fix). A teachable control; the base does NOT run
         #    Windows Update.
         Registry StrongCertBinding {
             Key       = 'HKLM:\SYSTEM\CurrentControlSet\Services\Kdc'

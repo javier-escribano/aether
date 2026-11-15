@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Health-check del Caelum Range: comprueba que la base y las rutas activas existen
-    y reporta el estado de cada condición vulnerable.
+    Azure Attack Range health-check: confirms that the baseline and the active paths exist
+    and reports the state of each vulnerable condition.
 #>
 [CmdletBinding()]
 param()
@@ -24,36 +24,36 @@ function Get-TfRaw($name) {
     } finally { Pop-Location }
 }
 
-Write-Host '=== Caelum Range — verify ===' -ForegroundColor Cyan
+Write-Host '=== Azure Attack Range - verify ===' -ForegroundColor Cyan
 
-# 1. Outputs de Terraform presentes
+# 1. Terraform outputs present
 Push-Location $TfDir
 try {
     $users = terraform output -json lab_users 2>$null | ConvertFrom-Json
     $appId = terraform output -raw ap01_app_id 2>$null
 } finally { Pop-Location }
 
-Test-Ok 'Usuarios base creados' ($users -and $users.Count -gt 0) "($($users.Count) usuarios)"
+Test-Ok 'Base users created' ($users -and $users.Count -gt 0) "($($users.Count) users)"
 
-# 2. AP01: app + policy de consentimiento
+# 2. AP01: app + consent policy
 if ($appId -and $appId -ne 'null') {
     try { Import-Module Microsoft.Graph.Applications, Microsoft.Graph.Identity.SignIns -ErrorAction Stop } catch {}
     if (-not (Get-MgContext)) {
         Connect-MgGraph -Scopes 'Application.Read.All', 'Policy.Read.All' -NoWelcome
     }
     $app = Get-MgServicePrincipal -Filter "appId eq '$appId'" -ErrorAction SilentlyContinue
-    Test-Ok 'AP01 app desplegada' ($null -ne $app) "appId=$appId"
+    Test-Ok 'AP01 app deployed' ($null -ne $app) "appId=$appId"
 
     $pol      = Get-MgPolicyAuthorizationPolicy
     $perms    = @($pol.DefaultUserRolePermissions.PermissionGrantPoliciesAssigned)
     $isVuln   = $perms -contains 'ManagePermissionGrantsForSelf.microsoft-user-default-legacy'
-    Test-Ok 'AP01 condición vulnerable (user-consent permisivo)' $isVuln `
-        $(if ($isVuln) { '-> explotable' } else { '-> remediado/seguro' })
+    Test-Ok 'AP01 vulnerable condition (permissive user-consent)' $isVuln `
+        $(if ($isVuln) { '-> exploitable' } else { '-> remediated/safe' })
 } else {
-    Write-Host '[i] AP01 desactivado (enable_ap01=false).' -ForegroundColor DarkGray
+    Write-Host '[i] AP01 disabled (enable_ap01=false).' -ForegroundColor DarkGray
 }
 
-# 3. AP05: DC híbrido + plantilla ESC1 (gated en el output ap05_dc_vm_name)
+# 3. AP05: hybrid DC + ESC1 template (gated on the output ap05_dc_vm_name)
 $dcVm = Get-TfRaw 'ap05_dc_vm_name'
 if ($dcVm) {
     $rg       = Get-TfRaw 'ap05_resource_group'
@@ -62,14 +62,14 @@ if ($dcVm) {
     $template = Get-TfRaw 'ap05_esc1_template_name'
     $lowUpn   = Get-TfRaw 'ap05_lowpriv_upn'
 
-    Test-Ok 'AP05 DC desplegado'           ($null -ne $dcVm)     "vm=$dcVm rg=$rg"
-    Test-Ok 'AP05 dominio definido'        ($null -ne $fqdn)     "fqdn=$fqdn"
-    Test-Ok 'AP05 CA definida'             ($null -ne $caName)   "ca=$caName"
-    Test-Ok 'AP05 plantilla ESC1 definida' ($null -ne $template) "template=$template"
-    Test-Ok 'AP05 usuario low-priv'        ($null -ne $lowUpn)   "upn=$lowUpn"
+    Test-Ok 'AP05 DC deployed'           ($null -ne $dcVm)     "vm=$dcVm rg=$rg"
+    Test-Ok 'AP05 domain defined'        ($null -ne $fqdn)     "fqdn=$fqdn"
+    Test-Ok 'AP05 CA defined'            ($null -ne $caName)   "ca=$caName"
+    Test-Ok 'AP05 ESC1 template defined' ($null -ne $template) "template=$template"
+    Test-Ok 'AP05 low-priv user'         ($null -ne $lowUpn)   "upn=$lowUpn"
 
-    # Opcional: confirmar en el DC que la plantilla está publicada y marcada ESC1
-    # y que la CA audita (AuditFilter=127). Requiere az y que la VM esté encendida.
+    # Optional: confirm on the DC that the template is published and marked ESC1
+    # and that the CA audits (AuditFilter=127). Requires az and the VM powered on.
     if ($rg -and (Get-Command az -ErrorAction SilentlyContinue)) {
         try {
             $probe = @(
@@ -78,19 +78,19 @@ if ($dcVm) {
             ) -join "`n"
             $res = az vm run-command invoke -g $rg -n $dcVm --command-id RunPowerShellScript --scripts $probe -o json 2>$null | ConvertFrom-Json
             $msg = ($res.value | ForEach-Object { $_.message }) -join "`n"
-            Test-Ok 'AP05 plantilla ESC1 publicada (certutil)' ($msg -match [regex]::Escape($template)) '-> solicitable'
-            Test-Ok 'AP05 auditoría CA habilitada (AuditFilter=127)' ($msg -match '0x7f|127') '-> Detecta operativo'
+            Test-Ok 'AP05 ESC1 template published (certutil)' ($msg -match [regex]::Escape($template)) '-> requestable'
+            Test-Ok 'AP05 CA auditing enabled (AuditFilter=127)' ($msg -match '0x7f|127') '-> Detect operational'
         } catch {
-            Write-Host '[i] AP05: no se pudo sondear el DC (¿VM deallocada por auto-shutdown?).' -ForegroundColor DarkGray
+            Write-Host '[i] AP05: could not probe the DC (VM deallocated by auto-shutdown?).' -ForegroundColor DarkGray
         }
     }
 } else {
-    Write-Host '[i] AP05 desactivado (enable_ap05=false).' -ForegroundColor DarkGray
+    Write-Host '[i] AP05 disabled (enable_ap05=false).' -ForegroundColor DarkGray
 }
 
-# 3b. AP06: Entra Connect / Seamless SSO (gated en el output ap06_dc_vm_name).
-# Centinela PROPIO: no reusa ap05_dc_vm_name (que es null con enable_ap05=false
-# aunque la VM compartida exista por AP06).
+# 3b. AP06: Entra Connect / Seamless SSO (gated on the output ap06_dc_vm_name).
+# Its OWN sentinel: does not reuse ap05_dc_vm_name (which is null with enable_ap05=false
+# even if the shared VM exists via AP06).
 $dc06 = Get-TfRaw 'ap06_dc_vm_name'
 if ($dc06) {
     $rg06    = Get-TfRaw 'ap06_resource_group'
@@ -98,14 +98,14 @@ if ($dc06) {
     $syncAcc = Get-TfRaw 'ap06_sync_account'
     $mode06  = Get-TfRaw 'ap06_sso_mode'
 
-    Test-Ok 'AP06 DC (compartido) desplegado' ($null -ne $dc06)    "vm=$dc06 rg=$rg06"
-    Test-Ok 'AP06 cuenta Seamless SSO def.'   ($null -ne $ssoAcc)  "acct=$ssoAcc"
-    Test-Ok 'AP06 cuenta de sync def.'        ($null -ne $syncAcc) "acct=$syncAcc"
-    Test-Ok 'AP06 sso_mode'                   ($null -ne $mode06)  "mode=$mode06"
+    Test-Ok 'AP06 DC (shared) deployed'      ($null -ne $dc06)    "vm=$dc06 rg=$rg06"
+    Test-Ok 'AP06 Seamless SSO account def.' ($null -ne $ssoAcc)  "acct=$ssoAcc"
+    Test-Ok 'AP06 sync account def.'         ($null -ne $syncAcc) "acct=$syncAcc"
+    Test-Ok 'AP06 sso_mode'                  ($null -ne $mode06)  "mode=$mode06"
 
-    # Sonda opcional (requiere az y la VM encendida): confirma en el DC que
-    # AZUREADSSOACC$ existe con su SPN de Seamless SSO y/o que la cuenta de sync
-    # está presente, según el modo sembrado.
+    # Optional probe (requires az and the VM powered on): confirms on the DC that
+    # AZUREADSSOACC$ exists with its Seamless SSO SPN and/or that the sync account
+    # is present, according to the seeded mode.
     if ($rg06 -and (Get-Command az -ErrorAction SilentlyContinue)) {
         try {
             $probe = @(
@@ -118,20 +118,20 @@ if ($dc06) {
             $res = az vm run-command invoke -g $rg06 -n $dc06 --command-id RunPowerShellScript --scripts $probe -o json 2>$null | ConvertFrom-Json
             $m = ($res.value | ForEach-Object { $_.message }) -join "`n"
             if ($mode06 -ne 'sync_dcsync') {
-                Test-Ok 'AP06 AZUREADSSOACC$ presente + SPN' ($m -match 'SSOACCT_PRESENT' -and $m -match 'autologon.microsoftazuread-sso.com') '-> silver ticket forjable'
+                Test-Ok 'AP06 AZUREADSSOACC$ present + SPN' ($m -match 'SSOACCT_PRESENT' -and $m -match 'autologon.microsoftazuread-sso.com') '-> forgeable silver ticket'
             }
             if ($mode06 -ne 'silver_ticket') {
-                Test-Ok 'AP06 cuenta de sync presente (DCSync)' ($m -match 'SYNC_PRESENT') '-> primitiva DCSync'
+                Test-Ok 'AP06 sync account present (DCSync)' ($m -match 'SYNC_PRESENT') '-> DCSync primitive'
             }
         } catch {
-            Write-Host '[i] AP06: no se pudo sondear el DC (¿VM deallocada por auto-shutdown?).' -ForegroundColor DarkGray
+            Write-Host '[i] AP06: could not probe the DC (VM deallocated by auto-shutdown?).' -ForegroundColor DarkGray
         }
     }
 } else {
-    Write-Host '[i] AP06 desactivado (enable_ap06=false).' -ForegroundColor DarkGray
+    Write-Host '[i] AP06 disabled (enable_ap06=false).' -ForegroundColor DarkGray
 }
 
-# 4. AP07: storage público / SAS leak (gated en el output ap07_storage_account)
+# 4. AP07: public storage / SAS leak (gated on the output ap07_storage_account)
 $ap07Sa = Get-TfRaw 'ap07_storage_account'
 if ($ap07Sa) {
     $ap07Rg     = Get-TfRaw 'ap07_resource_group'
@@ -140,54 +140,54 @@ if ($ap07Sa) {
     $ap07Priv   = Get-TfRaw 'ap07_private_container'
     $ap07Law    = Get-TfRaw 'ap07_law_name'
 
-    Test-Ok 'AP07 storage desplegada'      ($null -ne $ap07Sa)   "sa=$ap07Sa rg=$ap07Rg"
-    Test-Ok 'AP07 contenedor privado def.' ($null -ne $ap07Priv) "container=$ap07Priv"
+    Test-Ok 'AP07 storage deployed'      ($null -ne $ap07Sa)   "sa=$ap07Sa rg=$ap07Rg"
+    Test-Ok 'AP07 private container def.' ($null -ne $ap07Priv) "container=$ap07Priv"
 
-    # Sonda anónima (no requiere az ni credenciales): confirma la cadena end-to-end.
-    # Invoke-WebRequest degrada con gracia si no hay red o la cuenta aún no propagó DNS.
+    # Anonymous probe (requires neither az nor credentials): confirms the end-to-end chain.
+    # Invoke-WebRequest degrades gracefully if there is no network or the account has not propagated DNS yet.
     if ($ap07PubUrl) {
         try {
             $listUrl = "$($ap07PubUrl)?restype=container&comp=list"
             $resp = Invoke-WebRequest -Uri $listUrl -UseBasicParsing -TimeoutSec 20
-            # La doble puerta abierta (cuenta allow=true Y contenedor=container) deja
-            # LISTAR anónimamente: el XML debe nombrar backup-config.json (T1619).
-            Test-Ok 'AP07 enumeración anónima (LIST público)' ($resp.Content -match 'backup-config\.json') '-> doble puerta abierta (T1619)'
+            # The double open door (account allow=true AND container=container) allows
+            # anonymous LISTING: the XML must name backup-config.json (T1619).
+            Test-Ok 'AP07 anonymous enumeration (public LIST)' ($resp.Content -match 'backup-config\.json') '-> double open door (T1619)'
         } catch {
-            Write-Host '[i] AP07: no se pudo sondear el contenedor público (red / propagación DNS / remediado).' -ForegroundColor DarkGray
+            Write-Host '[i] AP07: could not probe the public container (network / DNS propagation / remediated).' -ForegroundColor DarkGray
         }
     }
 
     if ($ap07CfgUrl) {
         try {
             $cfg = Invoke-WebRequest -Uri $ap07CfgUrl -UseBasicParsing -TimeoutSec 20
-            # Descarga anónima del artefacto filtrado con la credencial (T1552.001).
-            Test-Ok 'AP07 descarga anónima backup-config.json' ($cfg.StatusCode -eq 200) '-> credencial filtrada (T1552.001)'
+            # Anonymous download of the leaked artifact with the credential (T1552.001).
+            Test-Ok 'AP07 anonymous download of backup-config.json' ($cfg.StatusCode -eq 200) '-> leaked credential (T1552.001)'
         } catch {
-            Write-Host '[i] AP07: backup-config.json no accesible anónimamente (¿remediado?).' -ForegroundColor DarkGray
+            Write-Host '[i] AP07: backup-config.json not anonymously accessible (remediated?).' -ForegroundColor DarkGray
         }
     }
 
-    # El contenedor privado NO debe ser listable anónimamente (confirma private).
+    # The private container must NOT be anonymously listable (confirms private).
     $privListable = $false
     try {
         $privListUrl = 'https://{0}.blob.core.windows.net/{1}?restype=container&comp=list' -f $ap07Sa, $ap07Priv
         $null = Invoke-WebRequest -Uri $privListUrl -UseBasicParsing -TimeoutSec 20
-        $privListable = $true   # 2xx => mal (sensitive-data sería público)
+        $privListable = $true   # 2xx => bad (sensitive-data would be public)
     } catch {
-        $privListable = $false  # 4xx / denegado => bien (private)
+        $privListable = $false  # 4xx / denied => good (private)
     }
-    Test-Ok 'AP07 contenedor privado NO listable anón.' (-not $privListable) '-> sensitive-data = private'
+    Test-Ok 'AP07 private container NOT anon. listable' (-not $privListable) '-> sensitive-data = private'
 
     if ($ap07Law) {
-        Test-Ok 'AP07 telemetría (StorageBlobLogs -> LAW)' ($null -ne $ap07Law) "law=$ap07Law"
+        Test-Ok 'AP07 telemetry (StorageBlobLogs -> LAW)' ($null -ne $ap07Law) "law=$ap07Law"
     } else {
-        Write-Host '[i] AP07: telemetría off o LAW externo (collect_storage_logs=false / existing_log_analytics_workspace_id).' -ForegroundColor DarkGray
+        Write-Host '[i] AP07: telemetry off or external LAW (collect_storage_logs=false / existing_log_analytics_workspace_id).' -ForegroundColor DarkGray
     }
 } else {
-    Write-Host '[i] AP07 desactivado (enable_ap07=false).' -ForegroundColor DarkGray
+    Write-Host '[i] AP07 disabled (enable_ap07=false).' -ForegroundColor DarkGray
 }
 
-# 5. AP08: Automation Account runbook → escalada RBAC (gated en el output ap08_automation_account)
+# 5. AP08: Automation Account runbook -> RBAC escalation (gated on the output ap08_automation_account)
 $ap08Aa = Get-TfRaw 'ap08_automation_account'
 if ($ap08Aa) {
     $ap08Rg      = Get-TfRaw 'ap08_resource_group'
@@ -197,19 +197,19 @@ if ($ap08Aa) {
     $ap08Upn     = Get-TfRaw 'ap08_attacker_upn'
     $ap08Law     = Get-TfRaw 'ap08_law_name'
 
-    Test-Ok 'AP08 Automation Account desplegada' ($null -ne $ap08Aa)  "aa=$ap08Aa rg=$ap08Rg"
-    Test-Ok 'AP08 MI system-assigned presente'   ($null -ne $ap08Mi)  "mi=$ap08Mi rol=$ap08Role"
-    Test-Ok 'AP08 atacante low-priv definido'    ($null -ne $ap08Upn) "upn=$ap08Upn"
+    Test-Ok 'AP08 Automation Account deployed' ($null -ne $ap08Aa)  "aa=$ap08Aa rg=$ap08Rg"
+    Test-Ok 'AP08 system-assigned MI present'  ($null -ne $ap08Mi)  "mi=$ap08Mi role=$ap08Role"
+    Test-Ok 'AP08 low-priv attacker defined'   ($null -ne $ap08Upn) "upn=$ap08Upn"
     if ($ap08Runbook) {
-        Test-Ok 'AP08 runbook incrustado (gun cargada)' ($null -ne $ap08Runbook) "runbook=$ap08Runbook"
+        Test-Ok 'AP08 embedded runbook (loaded gun)' ($null -ne $ap08Runbook) "runbook=$ap08Runbook"
     } else {
-        Write-Host '[i] AP08: runbook_mode=none (misconfig pura, sin runbook incrustado).' -ForegroundColor DarkGray
+        Write-Host '[i] AP08: runbook_mode=none (pure misconfig, no embedded runbook).' -ForegroundColor DarkGray
     }
 
-    # Sonda de POSTURA (opcional, requiere az): confirma que la MI ostenta el rol
-    # over-priv (UAA/Owner) SOBRE EL RG — la primitiva que habilita la escalada.
-    # NO confirma una escalada de runtime: en el apply no se dispara nada (la "gun"
-    # la dispara el alumno). verify valida la POSTURA, no un grant de runtime.
+    # POSTURE probe (optional, requires az): confirms that the MI holds the
+    # over-priv role (UAA/Owner) OVER THE RG - the primitive that enables the escalation.
+    # It does NOT confirm a runtime escalation: the apply fires nothing (the "gun"
+    # is fired by the student). verify validates the POSTURE, not a runtime grant.
     if ($ap08Rg -and $ap08Mi -and (Get-Command az -ErrorAction SilentlyContinue)) {
         try {
             $rgId = az group show -n $ap08Rg --query id -o tsv 2>$null
@@ -218,20 +218,20 @@ if ($ap08Aa) {
                 $roles = @()
                 try { $roles = @($raRaw | ConvertFrom-Json) | ForEach-Object { $_.roleDefinitionName } } catch {}
                 $hasOverPriv = @($roles | Where-Object { $_ -in @('Owner', 'User Access Administrator') }).Count -gt 0
-                Test-Ok 'AP08 MI ostenta rol over-priv sobre el RG' $hasOverPriv "-> roleAssignments/write (roles=$(@($roles) -join ', '))"
+                Test-Ok 'AP08 MI holds over-priv role over the RG' $hasOverPriv "-> roleAssignments/write (roles=$(@($roles) -join ', '))"
             }
         } catch {
-            Write-Host '[i] AP08: no se pudo sondear el role assignment de la MI (red / permisos / propagación AAD).' -ForegroundColor DarkGray
+            Write-Host '[i] AP08: could not probe the MI role assignment (network / permissions / AAD propagation).' -ForegroundColor DarkGray
         }
     }
 
     if ($ap08Law) {
-        Test-Ok 'AP08 telemetría (JobLogs+JobStreams -> LAW)' ($null -ne $ap08Law) "law=$ap08Law"
+        Test-Ok 'AP08 telemetry (JobLogs+JobStreams -> LAW)' ($null -ne $ap08Law) "law=$ap08Law"
     } else {
-        Write-Host '[i] AP08: telemetría off o LAW externo (collect_automation_logs=false / existing_log_analytics_workspace_id).' -ForegroundColor DarkGray
+        Write-Host '[i] AP08: telemetry off or external LAW (collect_automation_logs=false / existing_log_analytics_workspace_id).' -ForegroundColor DarkGray
     }
 } else {
-    Write-Host '[i] AP08 desactivado (enable_ap08=false).' -ForegroundColor DarkGray
+    Write-Host '[i] AP08 disabled (enable_ap08=false).' -ForegroundColor DarkGray
 }
 
-Write-Host "`nVerificación terminada." -ForegroundColor Cyan
+Write-Host "`nVerification finished." -ForegroundColor Cyan

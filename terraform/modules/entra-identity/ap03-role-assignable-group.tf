@@ -1,89 +1,90 @@
 # ==================================================================
-# AP03 — Grupo role-assignable + owner de bajo privilegio.
+# AP03 — Role-assignable group + low-privilege owner.
 #
-# Núcleo 100% DECLARATIVO (sin seed, needs_seed=none). La combinación
-# vulnerable son dos hechos que fija Terraform:
-#   (a) azuread_user.lab[0] (caelum-user1), usuario de BAJO privilegio,
-#       es el ÚNICO owner del grupo (owners = [...]), y
-#   (b) el grupo es role-assignable (assignable_to_role = true) y porta
-#       el rol de directorio 'Privileged Role Administrator' (PRA) vía
-#       azuread_directory_role_assignment.
+# 100% DECLARATIVE core (no seed, needs_seed=none). The vulnerable
+# combination is two facts that Terraform sets:
+#   (a) azuread_user.lab[0] (azrange-user1), a LOW-privilege user,
+#       is the ONLY owner of the group (owners = [...]), and
+#   (b) the group is role-assignable (assignable_to_role = true) and
+#       carries the 'Privileged Role Administrator' (PRA) directory
+#       role via azuread_directory_role_assignment.
 #
-# El PASO DE EXPLOTACIÓN NO se siembra: es comportamiento POR DEFECTO de
-# Entra. La membership de un grupo role-assignable solo la pueden
-# modificar tres principals -> Global Administrator, Privileged Role
-# Administrator y los OWNERS del grupo. Por tanto el owner de bajo
-# privilegio puede AUTO-AÑADIRSE a la membership sin rol admin, sin tocar
-# políticas de tenant y sin depender de ningún atributo self-writable
-# (department/jobTitle son admin-only por defecto). Al entrar en el grupo
-# hereda PRA y, con él, puede auto-asignarse Global Administrator = toma
-# del tenant. Es la arista canónica AZOwns -> grupo role-assignable ->
-# rol de BloodHound/AzureHound.
+# The EXPLOITATION STEP is NOT seeded: it is DEFAULT Entra behavior.
+# The membership of a role-assignable group can only be modified by
+# three principals -> Global Administrator, Privileged Role
+# Administrator and the group's OWNERS. Therefore the low-privilege
+# owner can ADD THEMSELVES to the membership without an admin role,
+# without touching tenant policies and without relying on any
+# self-writable attribute (department/jobTitle are admin-only by
+# default). On joining the group they inherit PRA and, with it, can
+# assign themselves Global Administrator = tenant takeover. This is
+# the canonical AZOwns -> role-assignable group -> role edge from
+# BloodHound/AzureHound.
 #
 # MITRE ATT&CK: T1098 (Account Manipulation) -> T1098.003 (Additional
 # Cloud Roles) -> T1078.004 (Valid Accounts: Cloud Accounts).
 #
-# PRECONDICIONES (de permisos/licencia, NO de estado vulnerable sembrado):
-#   - LICENCIA: los grupos role-assignable exigen Entra ID P1. Coste $ ~0
-#     pero requiere tenant dev/E5 con P1, NO Entra Free puro como AP01.
-#   - PERMISOS DE DEPLOY: el principal que ejecuta `terraform apply` debe
-#     poseer Privileged Role Administrator o Global Administrator (y el
-#     app-role RoleManagement.ReadWrite.Directory) para crear el grupo
-#     role-assignable y asignarle PRA.
-#   - LATENCIA: tras el self-add hay que re-autenticar para que el token
-#     recoja el rol heredado (anotado en la doc 'Rompe').
+# PRECONDITIONS (permission/license, NOT a seeded vulnerable state):
+#   - LICENSE: role-assignable groups require Entra ID P1. Cost ~$0
+#     but requires a dev/E5 tenant with P1, NOT pure Entra Free like AP01.
+#   - DEPLOY PERMISSIONS: the principal running `terraform apply` must
+#     hold Privileged Role Administrator or Global Administrator (and
+#     the RoleManagement.ReadWrite.Directory app role) to create the
+#     role-assignable group and assign it PRA.
+#   - LATENCY: after the self-add you must re-authenticate so the token
+#     picks up the inherited role (noted in the 'Exploit' doc).
 #
-# TEARDOWN: `./caelum.ps1 reset` re-aplica con enable_ap03=false
-# (count = 0) -> destruye grupo + asignación de rol y revierte el
-# self-add; members = [] lo revierte también en cualquier re-apply
-# intermedio. Los objetos creados tras escalar a GA quedan FUERA del
-# estado de Terraform y se limpian a mano (mismo caveat de scope que AP02).
+# TEARDOWN: `./azrange.ps1 reset` re-applies with enable_ap03=false
+# (count = 0) -> destroys the group + role assignment and reverts the
+# self-add; members = [] also reverts it on any intermediate re-apply.
+# Objects created after escalating to GA stay OUTSIDE the Terraform
+# state and are cleaned up by hand (same scope caveat as AP02).
 #
-# AP03-bis (solo documental, NO implementado): la variante de regla de
-# membresía dinámica + attribute-injection no se usa como base porque
-# Entra PROHÍBE la membresía dinámica en grupos role-assignable
-# precisamente para impedir esta escalada; ver docs/attack-paths.
+# AP03-bis (documentation only, NOT implemented): the dynamic
+# membership rule + attribute-injection variant is not used as a base
+# because Entra FORBIDS dynamic membership in role-assignable groups
+# precisely to prevent this escalation; see docs/attack-paths.
 # ==================================================================
 
 locals {
-  # Rol de directorio Entra que porta el grupo (botín intermedio de la
-  # cadena). PRA puede conceder CUALQUIER rol, Global Administrator
-  # incluido -> trátalo como Tier-0.
+  # Entra directory role carried by the group (intermediate loot of the
+  # chain). PRA can grant ANY role, Global Administrator included ->
+  # treat it as Tier-0.
   ap03_target_role_name = "Privileged Role Administrator"
 }
 
-# Instancia el rol de directorio PRA en el tenant (idempotente; si ya
-# estaba activado, azuread lo adopta). Expone template_id/object_id.
+# Instantiate the PRA directory role in the tenant (idempotent; if it was
+# already activated, azuread adopts it). Exposes template_id/object_id.
 resource "azuread_directory_role" "ap03_pra" {
   count        = var.enable_ap03 ? 1 : 0
   display_name = local.ap03_target_role_name
 }
 
-# Grupo PRIVILEGIADO role-assignable con un único owner de bajo privilegio.
+# PRIVILEGED role-assignable group with a single low-privilege owner.
 resource "azuread_group" "ap03_role_admins" {
   count            = var.enable_ap03 ? 1 : 0
   display_name     = "${var.lab_prefix}-ap03-role-admins"
   security_enabled = true
 
-  # role-assignable: habilita que el grupo porte roles de directorio.
-  # Exige Entra ID P1. Fuerza membership ESTÁTICA (Assigned): Entra
-  # bloquea reglas dinámicas en estos grupos (de ahí AP03-bis).
+  # role-assignable: lets the group carry directory roles. Requires
+  # Entra ID P1. Forces STATIC membership (Assigned): Entra blocks
+  # dynamic rules on these groups (hence AP03-bis).
   assignable_to_role = true
 
-  # MISCONFIG (eslabón mal configurado): el usuario de bajo privilegio
-  # caelum-user1 es el ÚNICO owner. Por defecto, un owner puede editar
-  # la membership de SU grupo role-assignable -> self-add.
+  # MISCONFIG (the misconfigured link): the low-privilege user
+  # azrange-user1 is the ONLY owner. By default, an owner can edit the
+  # membership of THEIR role-assignable group -> self-add.
   owners = [azuread_user.lab[0].object_id]
 
-  # Membership estática VACÍA: el atacante se auto-añade en tiempo de
-  # explotación (fuera de Terraform). members=[] también revierte el
-  # self-add en cualquier re-apply.
+  # EMPTY static membership: the attacker adds themselves at exploitation
+  # time (outside Terraform). members=[] also reverts the self-add on
+  # any re-apply.
   members = []
 }
 
-# Binding privilegiado: asigna PRA AL GRUPO (no a un usuario) -> todos
-# sus miembros heredan el rol. Esto es lo que convierte el self-add en
-# escalada a Privileged Role Administrator -> Global Administrator.
+# Privileged binding: assigns PRA TO THE GROUP (not to a user) -> all of
+# its members inherit the role. This is what turns the self-add into
+# escalation to Privileged Role Administrator -> Global Administrator.
 resource "azuread_directory_role_assignment" "ap03_pra" {
   count               = var.enable_ap03 ? 1 : 0
   role_id             = azuread_directory_role.ap03_pra[0].template_id

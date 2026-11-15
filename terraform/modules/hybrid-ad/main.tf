@@ -1,58 +1,59 @@
 # ==================================================================
-# Modulo: hybrid-ad  (capa HIBRIDA on-prem-en-Azure)
+# Module: hybrid-ad  (HYBRID on-prem-in-Azure layer)
 #
 # AP05 - AD CS ESC1 (Enrollee-Supplies-Subject):
-#   VM Windows Server 2022 -> DC (bosque de usar-y-tirar) -> Enterprise
-#   Root CA -> plantilla vulnerable 'CaelumAuthESC1' + usuario low-priv.
-#   El atacante (low-priv) solicita un cert especificando SAN=UPN de un
-#   Domain Admin, autentica por PKINIT -> TGT de DA -> DCSync.
+#   Windows Server 2022 VM -> DC (throwaway forest) -> Enterprise
+#   Root CA -> vulnerable template 'AzRangeAuthESC1' + low-priv user.
+#   The (low-priv) attacker requests a cert specifying SAN=UPN of a
+#   Domain Admin, authenticates via PKINIT -> DA TGT -> DCSync.
 #
-# Patron (igual que azure-resources/AP02): cada recurso va envuelto en
+# Pattern (same as azure-resources/AP02): every resource is wrapped in
 #   count = local.need_dc ? 1 : 0
-# de modo que `reset` (apply con enable_ap05=false) destruye la VM entera
-# y, atomicamente, la plantilla ESC1 + certs forjados + CA DB. La plantilla
-# NO es un recurso azurerm (azurerm no gestiona plantillas AD CS: viven en
-# el Configuration NC del DC) -> esa es justo la propiedad que da el reset
-# limpio. La siembra/remediacion imperativa la hace scripts/seed-ap05.ps1.
+# so that `reset` (apply with enable_ap05=false) destroys the entire VM
+# and, atomically, the ESC1 template + forged certs + CA DB. The template
+# is NOT an azurerm resource (azurerm does not manage AD CS templates: they
+# live in the DC's Configuration NC) -> that is exactly the property that
+# gives the clean reset. Imperative seeding/remediation is done by
+# scripts/seed-ap05.ps1.
 #
-# Reboot de DCPromo: lo posee el LCM de la DSC (RebootNodeIfNeeded +
-# ActionAfterReboot='ContinueConfiguration'); `terraform apply` bloquea en
-# la extension DSC hasta que bosque+CA+auditoria quedan Compliant.
+# DCPromo reboot: owned by the DSC LCM (RebootNodeIfNeeded +
+# ActionAfterReboot='ContinueConfiguration'); `terraform apply` blocks on
+# the DSC extension until forest+CA+auditing become Compliant.
 # ==================================================================
 
 locals {
   # ----------------------------------------------------------------
-  # SUBSTRATO COMPARTIDO (AP05 + AP06). El DC/CA es un unico bloque que
-  # sirve a AMBAS rutas hibridas. need_dc = enable_ap05 || enable_ap06:
-  # cuando enable_ap05=true, need_dc es IDENTICAMENTE true con independencia
-  # de enable_ap06 -> toda expresion reescrita de var.enable_ap05 a
-  # local.need_dc evalua igual en el escenario AP05-solo (mismo count, mismos
-  # [0], plan cero-diff). Los artefactos AP05 (CA/ESC1) siguen gated en
-  # enable_ap05 (seed-ap05); los AP06 (AZUREADSSOACC$/cuenta de sync) en
-  # enable_ap06 (seed-ap06). Reset con AMBAS flags false -> need_dc=false ->
-  # destruye el unico DC y con el todos los objetos AD de AP05+AP06.
+  # SHARED SUBSTRATE (AP05 + AP06). The DC/CA is a single block that
+  # serves BOTH hybrid paths. need_dc = enable_ap05 || enable_ap06:
+  # when enable_ap05=true, need_dc is IDENTICALLY true regardless of
+  # enable_ap06 -> every expression rewritten from var.enable_ap05 to
+  # local.need_dc evaluates the same in the AP05-only scenario (same count,
+  # same [0], zero-diff plan). The AP05 artifacts (CA/ESC1) stay gated on
+  # enable_ap05 (seed-ap05); the AP06 ones (AZUREADSSOACC$/sync account) on
+  # enable_ap06 (seed-ap06). Reset with BOTH flags false -> need_dc=false ->
+  # destroys the single DC and with it every AD object of AP05+AP06.
   # ----------------------------------------------------------------
   need_dc = var.enable_ap05 || var.enable_ap06
 
-  # Conditional short-circuit: no indexa [0] cuando el DC no existe.
+  # Conditional short-circuit: does not index [0] when the DC does not exist.
   suffix = local.need_dc ? random_string.suffix[0].result : ""
 
   rg_name = "${var.lab_prefix}-ap05-rg"
   vm_name = "${var.lab_prefix}-ap05-dc"
-  # Storage del paquete DSC: 3-24 lowercase alfanumerico, SIN guiones.
+  # DSC package storage: 3-24 lowercase alphanumeric, NO hyphens.
   sa_name = "${lower(replace(var.lab_prefix, "-", ""))}ap05dsc${local.suffix}"
 
-  # Azure prohibe 'Administrator' como admin de la VM; este admin SAM local
-  # DESAPARECE al promover el DC (por eso la DSC set+enable el built-in).
-  admin_username = "caelumadmin"
+  # Azure forbids 'Administrator' as the VM admin; this local SAM admin
+  # DISAPPEARS when the DC is promoted (which is why the DSC set+enables the built-in).
+  admin_username = "azrangeadmin"
 
   lowpriv_upn = "${var.lowpriv_user_name}@${var.domain_fqdn}"
 
-  # Password del DA: override por dc_admin_password (sensitive) o random.
-  # try() protege el [0] cuando random_password.dc_admin tiene count 0.
+  # DA password: override via dc_admin_password (sensitive) or random.
+  # try() protects the [0] when random_password.dc_admin has count 0.
   dc_admin_password = local.need_dc ? coalesce(var.dc_admin_password, try(random_password.dc_admin[0].result, null)) : null
 
-  # Reglas NSG solo si el operador da un CIDR (secure-by-default). Nunca 0.0.0.0/0.
+  # NSG rules only if the operator supplies a CIDR (secure-by-default). Never 0.0.0.0/0.
   nsg_rules = local.need_dc && var.admin_source_cidr != null ? [
     { name = "allow-rdp-inbound", priority = 1001, port = "3389" },
     { name = "allow-winrm-inbound", priority = 1002, port = "5985" },
@@ -61,7 +62,7 @@ locals {
 }
 
 # ------------------------------------------------------------------
-# Sufijo global unico (el storage account es namespace global).
+# Globally unique suffix (the storage account is a global namespace).
 # ------------------------------------------------------------------
 resource "random_string" "suffix" {
   count   = local.need_dc ? 1 : 0
@@ -73,11 +74,11 @@ resource "random_string" "suffix" {
 }
 
 # ------------------------------------------------------------------
-# Secretos (nunca hardcode). Set Windows-safe + 4 categorias garantizadas
-# para no fallar la complejidad de Azure en el recurso VM.
-#   - dc_admin : solo si no se pasa dc_admin_password (override sensitive).
-#   - dsrm     : SafeMode Administrator Password del DC.
-#   - lowpriv  : password del usuario de arranque del atacante.
+# Secrets (never hardcoded). Windows-safe set + 4 guaranteed categories
+# so the VM resource does not fail Azure's complexity requirement.
+#   - dc_admin : only if dc_admin_password is not supplied (sensitive override).
+#   - dsrm     : SafeMode Administrator Password of the DC.
+#   - lowpriv  : password of the attacker's starting user.
 # ------------------------------------------------------------------
 resource "random_password" "dc_admin" {
   count            = local.need_dc && var.dc_admin_password == null ? 1 : 0
@@ -110,7 +111,7 @@ resource "random_password" "lowpriv" {
 }
 
 # ------------------------------------------------------------------
-# Resource group contenedor (blast radius acotado al RG; reset = destroy).
+# Container resource group (blast radius scoped to the RG; reset = destroy).
 # ------------------------------------------------------------------
 resource "azurerm_resource_group" "ap05" {
   count    = local.need_dc ? 1 : 0
@@ -124,8 +125,8 @@ resource "azurerm_resource_group" "ap05" {
 }
 
 # ==================================================================
-# Red del DC: VNet 10.105.0.0/16 + subnet + IP publica Standard estatica
-# + NSG (sin SSH abierto: un DC no se expone a Internet) + NIC.
+# DC network: VNet 10.105.0.0/16 + subnet + static Standard public IP
+# + NSG (no open SSH: a DC is not exposed to the Internet) + NIC.
 # ==================================================================
 resource "azurerm_virtual_network" "ap05" {
   count               = local.need_dc ? 1 : 0
@@ -152,9 +153,9 @@ resource "azurerm_public_ip" "ap05" {
   sku                 = "Standard"
 }
 
-# NSG: divergencia DELIBERADA vs el SSH abierto de AP02. RDP/WinRM SOLO al
-# CIDR del operador; si admin_source_cidr es null, NINGUNA regla allow
-# (acceso por Bastion/serial-console). NUNCA 0.0.0.0/0 (validado en var).
+# NSG: DELIBERATE divergence vs AP02's open SSH. RDP/WinRM ONLY to the
+# operator's CIDR; if admin_source_cidr is null, NO allow rule at all
+# (access via Bastion/serial-console). NEVER 0.0.0.0/0 (validated in var).
 resource "azurerm_network_security_group" "ap05" {
   count               = local.need_dc ? 1 : 0
   name                = "${var.lab_prefix}-ap05-nsg"
@@ -198,9 +199,9 @@ resource "azurerm_network_interface_security_group_association" "ap05" {
 }
 
 # ==================================================================
-# VM del DC+CA: Windows Server 2022 Datacenter Gen2, Standard_B2ms.
-# admin 'caelumadmin' (SAM local que desaparece al promover: por eso la
-# DSC set+enable el built-in Administrator con dc_admin_password).
+# DC+CA VM: Windows Server 2022 Datacenter Gen2, Standard_B2ms.
+# admin 'azrangeadmin' (local SAM that disappears on promotion: which is why
+# the DSC set+enables the built-in Administrator with dc_admin_password).
 # ==================================================================
 resource "azurerm_windows_virtual_machine" "dc" {
   count               = local.need_dc ? 1 : 0
@@ -215,12 +216,12 @@ resource "azurerm_windows_virtual_machine" "dc" {
 
   network_interface_ids = [azurerm_network_interface.ap05[0].id]
 
-  # Managed identity (system-assigned): el Azure Monitor Agent (AMA, en
-  # monitoring.tf) se autentica contra Azure Monitor con la MI de la VM. SIN
-  # ella AMA se instala pero NO puede enviar los SecurityEvent al DCR/workspace
-  # -> 'Detecta' quedaria roto EN SILENCIO (apply OK pero cero ingesta, que es
-  # la UNICA via por la que estos eventos on-prem llegan a un SIEM). El DC no la
-  # necesita para el ataque; AMA si.
+  # Managed identity (system-assigned): the Azure Monitor Agent (AMA, in
+  # monitoring.tf) authenticates to Azure Monitor with the VM's MI. WITHOUT
+  # it AMA installs but CANNOT ship the SecurityEvents to the DCR/workspace
+  # -> 'Detect' would be broken SILENTLY (apply OK but zero ingestion, which is
+  # the ONLY path by which these on-prem events reach a SIEM). The DC does not
+  # need it for the attack; AMA does.
   identity {
     type = "SystemAssigned"
   }
@@ -239,9 +240,9 @@ resource "azurerm_windows_virtual_machine" "dc" {
 }
 
 # ------------------------------------------------------------------
-# Auto-shutdown diario: disciplina de coste (AP05 es, con AP02, el unico
-# AP que factura computo, y el mas caro). Patron identico a AP02.
-# Despliega de dia: un apagado en mitad del DCPromo rompe el bootstrap.
+# Daily auto-shutdown: cost discipline (AP05 is, together with AP02, the only
+# AP that bills compute, and the most expensive). Pattern identical to AP02.
+# Deploy during the day: a shutdown mid-DCPromo breaks the bootstrap.
 # ------------------------------------------------------------------
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "dc" {
   count              = local.need_dc ? 1 : 0
@@ -258,21 +259,21 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "dc" {
 }
 
 # ==================================================================
-# Empaquetado de la configuracion DSC (patron storage de AP02).
-#   archive_file zipea dsc/ (solo CaelumDC.ps1) -> storage -> blob -> SAS
-#   -> extension. El configurationData.psd1 (allow domain-user/plaintext,
-#   necesario porque la CA enterprise usa credencial de dominio cualificada)
-#   se sube como blob source_content APARTE -> el zip conserva SOLO el .ps1.
-#   output_path va a la RAIZ del modulo (hermano de dsc/, sin auto-inclusion
-#   recursiva): un subdir .dsc-build/ puede no existir y algunas versiones de
-#   hashicorp/archive NO crean el directorio padre -> fallo en plan/apply. El
-#   .zip generado esta en .gitignore.
+# DSC configuration packaging (AP02 storage pattern).
+#   archive_file zips dsc/ (only AzRangeDC.ps1) -> storage -> blob -> SAS
+#   -> extension. The configurationData.psd1 (allow domain-user/plaintext,
+#   needed because the enterprise CA uses a qualified domain credential)
+#   is uploaded as a SEPARATE source_content blob -> the zip keeps ONLY the .ps1.
+#   output_path goes to the module ROOT (sibling of dsc/, without recursive
+#   auto-inclusion): a .dsc-build/ subdir may not exist and some versions of
+#   hashicorp/archive do NOT create the parent directory -> failure at plan/apply.
+#   The generated .zip is in .gitignore.
 # ==================================================================
 data "archive_file" "dsc" {
   count       = local.need_dc ? 1 : 0
   type        = "zip"
   source_dir  = "${path.module}/dsc"
-  output_path = "${path.module}/CaelumDC.zip"
+  output_path = "${path.module}/AzRangeDC.zip"
 }
 
 resource "azurerm_storage_account" "dsc" {
@@ -295,7 +296,7 @@ resource "azurerm_storage_container" "dsc" {
 
 resource "azurerm_storage_blob" "dsc" {
   count                  = local.need_dc ? 1 : 0
-  name                   = "CaelumDC.zip"
+  name                   = "AzRangeDC.zip"
   storage_account_name   = azurerm_storage_account.dsc[0].name
   storage_container_name = azurerm_storage_container.dsc[0].name
   type                   = "Block"
@@ -303,11 +304,11 @@ resource "azurerm_storage_blob" "dsc" {
   content_md5            = data.archive_file.dsc[0].output_md5
 }
 
-# ConfigurationData: habilita credencial de dominio y evita el guard de
-# plaintext al compilar la MOF en la VM. Blob aparte (no va en el zip).
+# ConfigurationData: enables the domain credential and bypasses the plaintext
+# guard when compiling the MOF on the VM. Separate blob (not in the zip).
 resource "azurerm_storage_blob" "dsc_configdata" {
   count                  = local.need_dc ? 1 : 0
-  name                   = "CaelumDC.ConfigData.psd1"
+  name                   = "AzRangeDC.ConfigData.psd1"
   storage_account_name   = azurerm_storage_account.dsc[0].name
   storage_container_name = azurerm_storage_container.dsc[0].name
   type                   = "Block"
@@ -324,9 +325,9 @@ resource "azurerm_storage_blob" "dsc_configdata" {
   PSD1
 }
 
-# SAS de lectura para que la extension descargue los blobs. Fechas ESTATICAS
-# (no timestamp()) para no regenerar protected_settings y re-ejecutar la
-# extension en cada apply. Ventana amplia: solo se usa en el deploy.
+# Read SAS so the extension can download the blobs. STATIC dates
+# (not timestamp()) so protected_settings is not regenerated and the
+# extension is not re-run on every apply. Wide window: only used during deploy.
 data "azurerm_storage_account_sas" "dsc" {
   count             = local.need_dc ? 1 : 0
   connection_string = azurerm_storage_account.dsc[0].primary_connection_string
@@ -362,19 +363,19 @@ data "azurerm_storage_account_sas" "dsc" {
 }
 
 # ==================================================================
-# Extension DSC (UNICA opcion reboot-aware). type="DSC",
-# publisher="Microsoft.Powershell". La config levanta SOLO la BASE BENIGNA
-# (bosque + Enterprise Root CA + auditoria + usuario low-priv +
-# StrongCertificateBindingEnforcement). La plantilla ESC1 la siembra
+# DSC extension (the ONLY reboot-aware option). type="DSC",
+# publisher="Microsoft.Powershell". The config brings up ONLY the BENIGN BASE
+# (forest + Enterprise Root CA + auditing + low-priv user +
+# StrongCertificateBindingEnforcement). The ESC1 template is seeded by
 # seed-ap05.ps1 (post-apply, via az vm run-command).
 #
-# Credenciales por protected_settings.configurationArguments (CIFRADO),
-# NUNCA en settings en claro. timeouts para que un DSC colgado FALLE
-# (failure mode conocido) en vez de colgar `terraform apply`.
+# Credentials via protected_settings.configurationArguments (ENCRYPTED),
+# NEVER in cleartext settings. timeouts so a hung DSC FAILS
+# (known failure mode) instead of hanging `terraform apply`.
 # ==================================================================
 resource "azurerm_virtual_machine_extension" "dsc" {
   count                      = local.need_dc ? 1 : 0
-  name                       = "CaelumDC"
+  name                       = "AzRangeDC"
   virtual_machine_id         = azurerm_windows_virtual_machine.dc[0].id
   publisher                  = "Microsoft.Powershell"
   type                       = "DSC"
@@ -385,8 +386,8 @@ resource "azurerm_virtual_machine_extension" "dsc" {
     wmfVersion = "latest"
     configuration = {
       url      = azurerm_storage_blob.dsc[0].url
-      script   = "CaelumDC.ps1"
-      function = "CaelumDC"
+      script   = "AzRangeDC.ps1"
+      function = "AzRangeDC"
     }
     configurationData = {
       url = azurerm_storage_blob.dsc_configdata[0].url

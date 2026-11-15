@@ -1,77 +1,77 @@
 # ==================================================================
-# AP07 - Public storage / SAS leak (Azure, coste ~0, SIN VM).
+# AP07 - Public storage / SAS leak (Azure, ~zero cost, no VM).
 #
-# Ruta de EXFILTRACION DE DATOS en el plano de almacenamiento de Azure.
-# MITRE: T1530 (Data from Cloud Storage, primario) + T1619 (Cloud Storage
-# Object Discovery) + T1552.001 (Credentials In Files). Temario CARTP.
+# DATA EXFILTRATION path in Azure's storage plane.
+# MITRE: T1530 (Data from Cloud Storage, primary) + T1619 (Cloud Storage
+# Object Discovery) + T1552.001 (Credentials In Files). CARTP syllabus.
 #
-# Escenario (DOS puertas de acceso anonimo abiertas a proposito):
-#   1) A nivel de CUENTA: allow_nested_items_to_be_public = true.
-#      (azurerm ~3.116; renombrada desde allow_blob_public_access. OJO:
-#      desde ~nov-2023 el DEFAULT de plataforma para cuentas nuevas es
-#      false, por eso el lab lo pone EXPLICITO a true para ser vulnerable.)
-#   2) A nivel de CONTENEDOR: "public" con container_access_type="container"
-#      -> permite LISTAR blobs de forma anonima (?restype=container&comp=list),
-#      no solo leer -> habilita el descubrimiento T1619.
+# Scenario (TWO anonymous-access doors opened on purpose):
+#   1) At the ACCOUNT level: allow_nested_items_to_be_public = true.
+#      (azurerm ~3.116; renamed from allow_blob_public_access. NOTE:
+#      since ~nov-2023 the platform DEFAULT for new accounts is false,
+#      which is why the lab sets it EXPLICITLY to true to be vulnerable.)
+#   2) At the CONTAINER level: "public" with container_access_type="container"
+#      -> allows anonymous LISTING of blobs (?restype=container&comp=list),
+#      not just reading -> enables T1619 discovery.
 #
-# Cadena del atacante:
-#   1. Enum anonima:  GET https://<cuenta>.blob.core.windows.net/public
-#                         ?restype=container&comp=list  -> ve backup-config.json
-#   2. Descarga anon: GET .../public/backup-config.json -> extrae la credencial
-#                         SOBRE-PERMISIONADA (SAS de cuenta de larga vida).
-#   3. Pivote auth:   usa la SAS para leer /sensitive-data/customers.csv
-#                         (contenedor PRIVADO de la MISMA cuenta) -> exfiltra
-#                         la joya CAELUM{...}. La SAS trae escritura/borrado
-#                         -> rama de escalada/manipulacion demostrable.
+# Attacker chain:
+#   1. Anonymous enum: GET https://<account>.blob.core.windows.net/public
+#                         ?restype=container&comp=list  -> sees backup-config.json
+#   2. Anonymous download: GET .../public/backup-config.json -> extracts the
+#                         OVER-PERMISSIONED credential (long-lived account SAS).
+#   3. Auth pivot:    uses the SAS to read /sensitive-data/customers.csv
+#                         (PRIVATE container of the SAME account) -> exfiltrates
+#                         the AZRANGE{...} jewel. The SAS carries write/delete
+#                         -> demonstrable escalation/tampering branch.
 #
-# Patron feature-flag del repo: cada recurso vulnerable va con
+# Repo feature-flag pattern: every vulnerable resource carries
 #   count = var.enable_ap07 ? 1 : 0
-# reset = apply con enable_ap07=false -> count=0 -> destruye TODO AP07
-# (RG + cuenta + contenedores + blob filtrado + SAS + LAW) de forma atomica.
-# AP07 es la PRIMERA ruta 100% DECLARATIVA del repo: SIN seed-ap07.ps1, SIN
-# run-command, SIN hook post-apply. Todo (incluida la credencial incrustada
-# via source_content) lo cablea Terraform -> reset sin residuo out-of-state.
+# reset = apply with enable_ap07=false -> count=0 -> destroys ALL of AP07
+# (RG + account + containers + leaked blob + SAS + LAW) atomically.
+# AP07 is the repo's FIRST 100% DECLARATIVE path: NO seed-ap07.ps1, NO
+# run-command, NO post-apply hook. Everything (including the credential embedded
+# via source_content) is wired by Terraform -> reset with no out-of-state residue.
 #
-# Bifurcacion leak_mode (variable, default "sas", conmutable por el instructor):
-#   - "sas"         : la credencial filtrada es una SAS de CUENTA over-scoped
-#                     (data.azurerm_storage_account_sas). Expiracion estable y
-#                     reset-safe via hashicorp/time (time_static + time_offset),
-#                     analogo a como AP05 anadio hashicorp/archive. Remediacion:
-#                     user-delegation SAS (Entra, minima) + SAS expiration policy.
-#   - "account_key" : la credencial es la primary_access_key (control total).
-#                     Mas severa, sin provider nuevo. Remediacion:
-#                     shared_access_key_enabled=false (plano de datos por Entra).
+# leak_mode fork (variable, default "sas", switchable by the instructor):
+#   - "sas"         : the leaked credential is an over-scoped ACCOUNT SAS
+#                     (data.azurerm_storage_account_sas). Stable, reset-safe
+#                     expiry via hashicorp/time (time_static + time_offset),
+#                     analogous to how AP05 added hashicorp/archive. Remediation:
+#                     user-delegation SAS (Entra, minimal) + SAS expiration policy.
+#   - "account_key" : the credential is the primary_access_key (full control).
+#                     More severe, no new provider. Remediation:
+#                     shared_access_key_enabled=false (data plane via Entra).
 #
-# CAVEAT (como el bloque KB5014754 de AP05): la SAS/clave ATERRIZA EN EL
-# tfstate como sensible (data.azurerm_storage_account_sas, primary_connection_
-# string, primary_access_key y el source_content del blob filtrado). Trata el
-# estado como toxico (ya lo es por el SP de AP02 y dc_admin_password de AP05);
-# .gitignore ya bloquea *.tfstate. La SAS/clave NUNCA se expone como output.
+# CAVEAT (like AP05's KB5014754 block): the SAS/key LANDS IN THE
+# tfstate as sensitive (data.azurerm_storage_account_sas, primary_connection_
+# string, primary_access_key, and the leaked blob's source_content). Treat the
+# state as toxic (it already is, due to AP02's SP and AP05's dc_admin_password);
+# .gitignore already blocks *.tfstate. The SAS/key is NEVER exposed as an output.
 # ==================================================================
 
 locals {
-  # --- Nombres -------------------------------------------------------
-  # Conditional short-circuit (espejo de local.suffix de AP02): NO indexa
-  # [0] cuando enable_ap07=false, de modo que random_string.ap07 (count=0)
-  # no se evalua. El ternario de Terraform no evalua la rama no tomada.
+  # --- Names ---------------------------------------------------------
+  # Conditional short-circuit (mirror of AP02's local.suffix): does NOT index
+  # [0] when enable_ap07=false, so random_string.ap07 (count=0) is not
+  # evaluated. Terraform's ternary does not evaluate the untaken branch.
   ap07_suffix = var.enable_ap07 ? random_string.ap07[0].result : ""
 
   ap07_rg_name = "${var.lab_prefix}-ap07-rg"
 
-  # Storage: 3-24 lowercase alfanumerico, SIN guiones (estilo AP02).
-  # "caelum" (6) + "ap07" (4) + sufijo (5) = 15 chars con el prefijo por defecto.
+  # Storage: 3-24 lowercase alphanumeric, NO hyphens (AP02 style).
+  # "azrange" (7) + "ap07" (4) + suffix (5) = 16 chars with the default prefix.
   ap07_sa_name = "${lower(replace(var.lab_prefix, "-", ""))}ap07${local.ap07_suffix}"
 
-  # --- Gate secundario del modo SAS ---------------------------------
-  # Los recursos time_* y el data SAS existen SOLO en leak_mode="sas".
-  # En "account_key" su count=0 (el provider time queda declarado-sin-uso,
-  # coste nulo) y la credencial es la primary_access_key, ya en estado.
+  # --- Secondary gate for the SAS mode ------------------------------
+  # The time_* resources and the SAS data source exist ONLY in leak_mode="sas".
+  # In "account_key" their count=0 (the time provider stays declared-but-unused,
+  # zero cost) and the credential is the primary_access_key, already in state.
   ap07_sas_mode = var.enable_ap07 && var.leak_mode == "sas"
 
-  # --- Telemetria (calca local.collect_events de hybrid-ad/monitoring.tf) ---
+  # --- Telemetry (mirrors local.collect_events in hybrid-ad/monitoring.tf) ---
   ap07_collect_logs = var.enable_ap07 && var.collect_storage_logs
 
-  # Workspace propio, o el externo si se da existing_log_analytics_workspace_id.
+  # Own workspace, or the external one if existing_log_analytics_workspace_id is set.
   ap07_law_id = local.ap07_collect_logs ? (
     var.existing_log_analytics_workspace_id != null ? var.existing_log_analytics_workspace_id : azurerm_log_analytics_workspace.ap07[0].id
   ) : null
@@ -80,10 +80,10 @@ locals {
 }
 
 # ------------------------------------------------------------------
-# Sufijo global PROPIO (la cuenta de storage es un namespace global).
-# NO reutiliza random_string.suffix de AP02: ese esta gateado en
-# enable_ap02, e indexar [0] con AP02 off y AP07 on reventaria el apply.
-# length 5, lower+numeric, sin guiones.
+# OWN global suffix (the storage account is a global namespace).
+# Does NOT reuse random_string.suffix from AP02: that one is gated on
+# enable_ap02, and indexing [0] with AP02 off and AP07 on would blow up the apply.
+# length 5, lower+numeric, no hyphens.
 # ------------------------------------------------------------------
 resource "random_string" "ap07" {
   count   = var.enable_ap07 ? 1 : 0
@@ -95,7 +95,7 @@ resource "random_string" "ap07" {
 }
 
 # ------------------------------------------------------------------
-# Resource group contenedor de toda la ruta (blast radius acotado).
+# Resource group containing the whole path (bounded blast radius).
 # ------------------------------------------------------------------
 resource "azurerm_resource_group" "ap07" {
   count    = var.enable_ap07 ? 1 : 0
@@ -109,20 +109,20 @@ resource "azurerm_resource_group" "ap07" {
 }
 
 # ==================================================================
-# MISCONFIG #1 (puerta de CUENTA): allow_nested_items_to_be_public = true.
-# Este bloque es el INVERSO EXACTO del bloque seguro ya existente
-# azurerm_storage_account.dsc (modules/hybrid-ad/main.tf): mismos
-# account_tier/replication y min_tls_version="TLS1_2", pero el flag de
-# acceso publico puesto a TRUE (vs el false seguro de aquel bloque) ->
-# confirma el nombre de atributo para azurerm ~3.116.
+# MISCONFIG #1 (ACCOUNT door): allow_nested_items_to_be_public = true.
+# This block is the EXACT INVERSE of the existing secure block
+# azurerm_storage_account.dsc (modules/hybrid-ad/main.tf): same
+# account_tier/replication and min_tls_version="TLS1_2", but the public-
+# access flag set to TRUE (vs the secure false of that block) ->
+# confirms the attribute name for azurerm ~3.116.
 #
-# NOTA: secure transport NO mitiga la fuga (el endpoint blob es https
-# igualmente), por eso min_tls_version se mantiene en el valor seguro a
-# proposito: la leccion aisla la causa (la vuln es el ACCESO PUBLICO).
+# NOTE: secure transport does NOT mitigate the leak (the blob endpoint is https
+# anyway), which is why min_tls_version is kept at the secure value on
+# purpose: the lesson isolates the cause (the vuln is PUBLIC ACCESS).
 #
-# shared_access_key_enabled=true (default) es necesario para que el data
-# source de la SAS de cuenta (y la primary_access_key) funcionen; la
-# remediacion #5 lo pone a false -> plano de datos SOLO por Entra RBAC.
+# shared_access_key_enabled=true (default) is needed for the account SAS data
+# source (and primary_access_key) to work; remediation #5 sets it to false ->
+# data plane ONLY via Entra RBAC.
 # ==================================================================
 resource "azurerm_storage_account" "ap07" {
   count                    = var.enable_ap07 ? 1 : 0
@@ -133,19 +133,19 @@ resource "azurerm_storage_account" "ap07" {
   account_replication_type = "LRS"
   min_tls_version          = "TLS1_2"
 
-  # Firma de SAS de cuenta y primary_access_key (remediacion: =false).
+  # Account SAS signing and primary_access_key (remediation: =false).
   shared_access_key_enabled = true
 
-  # ===== MISCONFIG explicita (inverso del bloque azurerm_storage_account.dsc) =====
+  # ===== Explicit MISCONFIG (inverse of the azurerm_storage_account.dsc block) =====
   allow_nested_items_to_be_public = true
 }
 
 # ==================================================================
-# MISCONFIG #2 (puerta de CONTENEDOR): "public" con access "container".
-# "container" permite LISTAR anonimamente (?restype=container&comp=list),
-# no solo leer. Es lo que habilita el descubrimiento T1619 sin adivinar
-# el nombre del blob. (Con "blob" se podria LEER si adivinas el nombre,
-# pero no LISTAR: load-bearing.)
+# MISCONFIG #2 (CONTAINER door): "public" with access "container".
+# "container" allows anonymous LISTING (?restype=container&comp=list),
+# not just reading. That is what enables T1619 discovery without guessing
+# the blob name. (With "blob" you could READ if you guess the name,
+# but not LIST: load-bearing.)
 # ==================================================================
 resource "azurerm_storage_container" "ap07_public" {
   count                 = var.enable_ap07 ? 1 : 0
@@ -154,8 +154,8 @@ resource "azurerm_storage_container" "ap07_public" {
   container_access_type = "container"
 }
 
-# Contenedor PRIVADO con la joya de la corona. Defensa en profundidad:
-# cerrar CUALQUIERA de las dos puertas (cuenta o contenedor) corta el ataque.
+# PRIVATE container with the crown jewel. Defense in depth:
+# closing EITHER of the two doors (account or container) cuts the attack.
 resource "azurerm_storage_container" "ap07_sensitive" {
   count                 = var.enable_ap07 ? 1 : 0
   name                  = "sensitive-data"
@@ -164,9 +164,9 @@ resource "azurerm_storage_container" "ap07_sensitive" {
 }
 
 # ------------------------------------------------------------------
-# Joya de la corona: customers.csv en el contenedor PRIVADO.
-# PII 100% SINTETICA (dominios .invalid, tokens ficticios). El objetivo
-# del pivote autenticado (paso 3). Contiene la flag CAELUM{...}.
+# Crown jewel: customers.csv in the PRIVATE container.
+# 100% SYNTHETIC PII (.invalid domains, fictitious tokens). The target
+# of the authenticated pivot (step 3). Contains the AZRANGE{...} flag.
 # ------------------------------------------------------------------
 resource "azurerm_storage_blob" "ap07_jewel" {
   count                  = var.enable_ap07 ? 1 : 0
@@ -176,31 +176,31 @@ resource "azurerm_storage_blob" "ap07_jewel" {
   type                   = "Block"
   content_type           = "text/csv"
 
-  # Heredoc NO indentado (a columna 0): sin recorte de whitespace -> celdas CSV
-  # limpias sin espacios iniciales (evita la ambiguedad del recorte de <<-).
+  # Heredoc NOT indented (at column 0): no whitespace trimming -> clean CSV
+  # cells with no leading spaces (avoids the <<- trimming ambiguity).
   source_content = <<CSV
 id,full_name,email,city,plan,last_payment_token,notes
-1001,Alice Ficticia,alice@example.invalid,Madrid,enterprise,tok_0000111122223333,CAELUM{ap07_public_blob_to_sas_to_private_exfil}
-1002,Bruno Imaginario,bruno@example.invalid,Lisboa,pro,tok_4444555566667777,registro sintetico - sin PII real
-1003,Carla Inventada,carla@example.invalid,Paris,free,tok_8888999900001111,registro sintetico - sin PII real
-1004,Diego Ejemplo,diego@example.invalid,Roma,pro,tok_2222333344445555,registro sintetico - sin PII real
+1001,Alice Ficticia,alice@example.invalid,Madrid,enterprise,tok_0000111122223333,AZRANGE{ap07_public_blob_to_sas_to_private_exfil}
+1002,Bruno Imaginario,bruno@example.invalid,Lisbon,pro,tok_4444555566667777,synthetic record - no real PII
+1003,Carla Inventada,carla@example.invalid,Paris,free,tok_8888999900001111,synthetic record - no real PII
+1004,Diego Ejemplo,diego@example.invalid,Rome,pro,tok_2222333344445555,synthetic record - no real PII
 CSV
 }
 
 # ==================================================================
-# [leak_mode="sas"] Expiracion estable y RESET-SAFE de la SAS.
+# [leak_mode="sas"] Stable, RESET-SAFE expiry for the SAS.
 #
-# hashicorp/time fija el start una sola vez (time_static, persistido en
-# estado -> no deriva) y calcula el expiry = start + sas_expiry_years
-# (time_offset, tambien persistido). Con inputs estables (start/expiry pin
-# + primary_connection_string estable, pues Terraform no rota la clave) el
-# data.azurerm_storage_account_sas produce un token DETERMINISTA -> el blob
-# backup-config.json es estable -> `terraform plan` tras apply = "No changes".
+# hashicorp/time pins the start once (time_static, persisted in state ->
+# no drift) and computes expiry = start + sas_expiry_years (time_offset,
+# also persisted). With stable inputs (start/expiry pin + stable
+# primary_connection_string, since Terraform does not rotate the key) the
+# data.azurerm_storage_account_sas produces a DETERMINISTIC token -> the blob
+# backup-config.json is stable -> `terraform plan` after apply = "No changes".
 #
-# GOTCHA documentado: NO usar timestamp()/timeadd(timestamp(),...) para
-# start/expiry -> recalcularia el HMAC en cada apply y re-renderizaria el
-# blob (perpetual-diff que rompe la idempotencia de CONTRIBUTING). Ese es el
-# motivo tecnico que justifica el provider nuevo (precedente: AP05/archive).
+# Documented GOTCHA: do NOT use timestamp()/timeadd(timestamp(),...) for
+# start/expiry -> it would recompute the HMAC on every apply and re-render the
+# blob (perpetual-diff that breaks the idempotency in CONTRIBUTING). That is the
+# technical reason that justifies the new provider (precedent: AP05/archive).
 # ==================================================================
 resource "time_static" "ap07" {
   count = local.ap07_sas_mode ? 1 : 0
@@ -213,15 +213,15 @@ resource "time_offset" "ap07_expiry" {
 }
 
 # ------------------------------------------------------------------
-# [leak_mode="sas"] SAS de CUENTA deliberadamente SOBRE-SCOPED:
+# [leak_mode="sas"] Deliberately OVER-SCOPED ACCOUNT SAS:
 #   resource_types service+container+object, services blob,
-#   permissions r/w/d/l/a/c/u/p (+tag/filter, requeridos por el schema).
-# Da escritura/borrado en TODA la cuenta -> la rama de escalada se demuestra.
+#   permissions r/w/d/l/a/c/u/p (+tag/filter, required by the schema).
+# Grants write/delete across the WHOLE account -> the escalation branch is demonstrable.
 #
-# GOTCHA de dependencia: el data source LEE la clave -> requiere
-# shared_access_key_enabled=true (default). Aplicar la remediacion #5 con
-# enable_ap07=true hace fallar este data source: CORRECTO por diseno (el
-# estado seguro es el default, el vulnerable es explicito; no es un bug).
+# Dependency GOTCHA: the data source READS the key -> requires
+# shared_access_key_enabled=true (default). Applying remediation #5 with
+# enable_ap07=true makes this data source fail: CORRECT by design (the
+# secure state is the default, the vulnerable one is explicit; not a bug).
 # ------------------------------------------------------------------
 data "azurerm_storage_account_sas" "ap07" {
   count             = local.ap07_sas_mode ? 1 : 0
@@ -241,12 +241,12 @@ data "azurerm_storage_account_sas" "ap07" {
     file  = false
   }
 
-  # Pin estable (persistido en estado) -> token determinista -> idempotente.
+  # Stable pin (persisted in state) -> deterministic token -> idempotent.
   start  = time_static.ap07[0].rfc3339
   expiry = time_offset.ap07_expiry[0].rfc3339
 
-  # SOBRE-SCOPE deliberado (least-privilege INVERTIDO). tag/filter van
-  # explicitos porque el schema del data source los exige.
+  # Deliberate OVER-SCOPE (least-privilege INVERTED). tag/filter are
+  # explicit because the data source schema requires them.
   permissions {
     read    = true
     write   = true
@@ -262,17 +262,17 @@ data "azurerm_storage_account_sas" "ap07" {
 }
 
 # ==================================================================
-# Blob FILTRADO: backup-config.json en el contenedor PUBLICO.
-# El artefacto "olvidado" con la credencial over-permisionada incrustada
-# (T1552.001). El source_content conmuta por leak_mode:
-#   - "sas"         : incrusta la sasUrl ya montada (el .sas NO lleva el
-#                     "?" inicial, por eso se construye ".../sensitive-data?${sas}").
-#   - "account_key" : incrusta la primary_access_key + connection string.
+# LEAKED blob: backup-config.json in the PUBLIC container.
+# The "forgotten" artifact with the over-permissioned credential embedded
+# (T1552.001). The source_content switches on leak_mode:
+#   - "sas"         : embeds the already-assembled sasUrl (the .sas does NOT carry
+#                     the leading "?", which is why it is built as ".../sensitive-data?${sas}").
+#   - "account_key" : embeds the primary_access_key + connection string.
 #
-# Short-circuit (mismo mecanismo que local.ap07_suffix): la rama "sas"
-# referencia data.azurerm_storage_account_sas.ap07[0] y SOLO se toma cuando
-# leak_mode=="sas" (que es justo cuando ese data source tiene count=1). En
-# "account_key" la rama no se toma -> no se indexa [0] del data source (count=0).
+# Short-circuit (same mechanism as local.ap07_suffix): the "sas" branch
+# references data.azurerm_storage_account_sas.ap07[0] and is ONLY taken when
+# leak_mode=="sas" (which is exactly when that data source has count=1). In
+# "account_key" the branch is not taken -> the data source's [0] is not indexed (count=0).
 # ==================================================================
 resource "azurerm_storage_blob" "ap07_leaked" {
   count                  = var.enable_ap07 ? 1 : 0
@@ -296,23 +296,23 @@ resource "azurerm_storage_blob" "ap07_leaked" {
 }
 
 # ==================================================================
-# TELEMETRIA (gated local.ap07_collect_logs = enable_ap07 && collect_storage_logs).
+# TELEMETRY (gated local.ap07_collect_logs = enable_ap07 && collect_storage_logs).
 #
-# Primer azurerm_monitor_diagnostic_setting del repo (monitoring.tf usa
-# DCR/AMA, que es para el canal de eventos de una VM Windows, NO para el
-# plano de datos de storage). Los logs del PLANO DE DATOS cuelgan del
-# sub-recurso blobServices/default, no de la cuenta.
+# The repo's first azurerm_monitor_diagnostic_setting (monitoring.tf uses
+# DCR/AMA, which is for a Windows VM's event channel, NOT for the storage
+# data plane). The DATA PLANE logs hang off the blobServices/default
+# sub-resource, not the account.
 #
-# Propiedad a destacar: StorageBlobLogs NO esta activo por defecto -> sin
-# este diagnostic setting la cadena (acceso anonimo + pivote SAS) NO existe
-# en NINGUN SIEM (analogo exacto a "los eventos on-prem no existen sin
-# AMA+DCR" de AP05). El plano de GESTION (el misconfig) viaja por
-# AzureActivity, que ya fluye sin provisionar nada (como en AP02).
-# Ingesta << 0,1 GB/dia (unos KB de blobs + operaciones del ejercicio).
+# Property to highlight: StorageBlobLogs is NOT active by default -> without
+# this diagnostic setting the chain (anonymous access + SAS pivot) does NOT exist
+# in ANY SIEM (exact analogue of "on-prem events do not exist without
+# AMA+DCR" in AP05). The MANAGEMENT plane (the misconfig) travels through
+# AzureActivity, which already flows without provisioning anything (as in AP02).
+# Ingestion << 0.1 GB/day (a few KB of blobs + the exercise's operations).
 # ==================================================================
 
-# Workspace propio (se OMITE si el operador apunta a un LAW/Sentinel externo
-# via existing_log_analytics_workspace_id). Calca azurerm_log_analytics_workspace.ap05.
+# Own workspace (OMITTED if the operator points at an external LAW/Sentinel
+# via existing_log_analytics_workspace_id). Mirrors azurerm_log_analytics_workspace.ap05.
 resource "azurerm_log_analytics_workspace" "ap07" {
   count               = local.ap07_collect_logs && var.existing_log_analytics_workspace_id == null ? 1 : 0
   name                = "${var.lab_prefix}-ap07-law"
@@ -322,15 +322,15 @@ resource "azurerm_log_analytics_workspace" "ap07" {
   retention_in_days   = 31
 }
 
-# Diagnostic setting sobre blobServices/default -> StorageBlobLogs.
-#   - log_analytics_destination_type="Dedicated" -> tabla resource-specific
-#     StorageBlobLogs (esquema rico: AuthenticationType, OperationName, Uri,
-#     CallerIpAddress, StatusCode, RequesterObjectId) contra la que se escribe
-#     el KQL; sin "Dedicated" caeria en AzureDiagnostics legacy.
-#   - metric{Transaction, enabled=false}: evita el perpetual-diff conocido
-#     cuando la API devuelve el bloque metric (idempotencia en CI).
-# Nombre unico (${lab_prefix}-ap07-blob-diag) para no colisionar si el LAW
-# externo es el mismo que usa AP05.
+# Diagnostic setting on blobServices/default -> StorageBlobLogs.
+#   - log_analytics_destination_type="Dedicated" -> resource-specific table
+#     StorageBlobLogs (rich schema: AuthenticationType, OperationName, Uri,
+#     CallerIpAddress, StatusCode, RequesterObjectId) that the KQL is written
+#     against; without "Dedicated" it would fall into legacy AzureDiagnostics.
+#   - metric{Transaction, enabled=false}: avoids the known perpetual-diff
+#     when the API returns the metric block (idempotency in CI).
+# Unique name (${lab_prefix}-ap07-blob-diag) so it does not collide if the
+# external LAW is the same one AP05 uses.
 resource "azurerm_monitor_diagnostic_setting" "ap07_blob" {
   count                          = local.ap07_collect_logs ? 1 : 0
   name                           = "${var.lab_prefix}-ap07-blob-diag"

@@ -1,35 +1,35 @@
 // =====================================================================
-// AP02 — Managed Identity sobre-privilegiada -> self-grant en Key Vault ->
-//        robo del secreto botin -> movimiento lateral (VM -> MI -> KV -> SP -> datos)
+// AP02 — Over-privileged Managed Identity -> self-grant on Key Vault ->
+//        theft of the loot secret -> lateral movement (VM -> MI -> KV -> SP -> data)
 //
-// Fuentes (tablas REALES en Log Analytics / Sentinel / Defender XDR):
+// Sources (REAL tables in Log Analytics / Sentinel / Defender XDR):
 //   - AzureActivity            (management-plane: role assignment + set-policy / update vault)
-//   - AzureDiagnostics         (data-plane Key Vault, ResourceType == 'VAULTS')  [modo clasico]
-//   - AZKVAuditLogs            (data-plane Key Vault, tabla dedicada)            [modo resource-specific]
+//   - AzureDiagnostics         (data-plane Key Vault, ResourceType == 'VAULTS')  [classic mode]
+//   - AZKVAuditLogs            (data-plane Key Vault, dedicated table)            [resource-specific mode]
 //
 // MITRE: T1098  (Account Manipulation: self-grant via access policy)
-//        T1552.005 (Unsecured Credentials: Cloud Instance Metadata API -> lectura del secreto)
-//        T1078.004 (Valid Accounts: Cloud Accounts — MI sobre-privilegiada y SP robado)
-//        T1580  (Cloud Infrastructure Discovery — enumeracion previa, no cubierta aqui)
+//        T1552.005 (Unsecured Credentials: Cloud Instance Metadata API -> reading the secret)
+//        T1078.004 (Valid Accounts: Cloud Accounts — over-privileged MI and stolen SP)
+//        T1580  (Cloud Infrastructure Discovery — prior enumeration, not covered here)
 //
-// CAVEAT: la llamada al IMDS (169.254.169.254) NO genera telemetria propia en Azure.
-// La deteccion se apoya en eventos AGUAS ABAJO: AzureActivity del set-policy/role
-// assignment y AuditEvent del vault (SecretGet). No existe un "log de robo de token".
+// CAVEAT: the call to IMDS (169.254.169.254) does NOT generate its own telemetry in Azure.
+// Detection relies on DOWNSTREAM events: AzureActivity for the set-policy / role
+// assignment and the vault's AuditEvent (SecretGet). There is no "token theft log".
 //
-// Autor: Caelum Range   Fecha: 2026-11-14
+// Author: Azure Attack Range   Date: 2026-11-14
 // =====================================================================
 
-let lab_prefix   = "caelum-ap02";                 // ajustar si cambia lab_prefix
-let secret_name  = "automation-sp-secret";        // secreto botin (client secret del SP)
+let lab_prefix   = "azrange-ap02";                // adjust if lab_prefix changes
+let secret_name  = "automation-sp-secret";        // loot secret (client secret of the SP)
 let lookback     = 1d;
 let corr_window  = 30m;
 
 // ---------------------------------------------------------------------
-// SEÑAL A — Etapa 5 (T1098): la MI se auto-concede permiso de datos
-//           reescribiendo la access policy del Key Vault (set-policy),
-//           o se asigna un rol RBAC. Primitiva del temario CARTP.
+// SIGNAL A — Stage 5 (T1098): the MI self-grants data permission by
+//           rewriting the Key Vault access policy (set-policy),
+//           or assigns itself an RBAC role. CARTP-syllabus primitive.
 //   az keyvault set-policy  -> Microsoft.KeyVault/vaults/accessPolicies/write
-//                              (o Microsoft.KeyVault/vaults/write — "Update Key Vault")
+//                              (or Microsoft.KeyVault/vaults/write — "Update Key Vault")
 //   role assignment         -> Microsoft.Authorization/roleAssignments/write
 // ---------------------------------------------------------------------
 let SignalA_mgmt =
@@ -37,18 +37,18 @@ let SignalA_mgmt =
     | where TimeGenerated > ago(lookback)
     | where OperationNameValue in~ (
           "MICROSOFT.KEYVAULT/VAULTS/ACCESSPOLICIES/WRITE",   // set-policy (self-grant)
-          "MICROSOFT.KEYVAULT/VAULTS/WRITE",                  // update vault (puede llevar policy)
-          "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE")    // asignacion de rol excesiva
-    | where ActivityStatusValue in~ ("Success", "Accept", "Start")   // valores reales del esquema moderno de AzureActivity
+          "MICROSOFT.KEYVAULT/VAULTS/WRITE",                  // update vault (may carry a policy)
+          "MICROSOFT.AUTHORIZATION/ROLEASSIGNMENTS/WRITE")    // excessive role assignment
+    | where ActivityStatusValue in~ ("Success", "Accept", "Start")   // real values of the modern AzureActivity schema
     | extend Stage = case(
-          OperationNameValue has "ROLEASSIGNMENTS", "T1098 — role assignment (priv. excesivo)",
+          OperationNameValue has "ROLEASSIGNMENTS", "T1098 — role assignment (excessive priv.)",
           "T1098 — Key Vault access policy self-grant")
-    | extend CallerRole = tostring(Authorization_d.evidence.role)   // rol RBAC del LLAMANTE (no el rol asignado en roleAssignments/write)
+    | extend CallerRole = tostring(Authorization_d.evidence.role)   // RBAC role of the CALLER (not the role assigned in roleAssignments/write)
     | project TimeGenerated,
               Signal = "A-mgmt-plane",
               Stage,
               OperationNameValue,
-              Caller,                      // objectId del principal que actua (MI / usuario)
+              Caller,                      // objectId of the acting principal (MI / user)
               CallerIpAddress,
               ResourceGroup,
               _ResourceId,
@@ -56,10 +56,10 @@ let SignalA_mgmt =
               ActivityStatusValue;
 
 // ---------------------------------------------------------------------
-// SEÑAL B — Etapa 6 (T1552.005): lectura del secreto botin en el Key Vault
-//           tras el self-grant. Modo CLASICO (AzureDiagnostics).
+// SIGNAL B — Stage 6 (T1552.005): reading the loot secret in the Key Vault
+//           after the self-grant. CLASSIC mode (AzureDiagnostics).
 //           OperationName: SecretGet / SecretList.
-//           identity_claim_oid_g = objectId del caller (principalId de la MI).
+//           identity_claim_oid_g = objectId of the caller (principalId of the MI).
 // ---------------------------------------------------------------------
 let SignalB_diag =
     AzureDiagnostics
@@ -67,22 +67,22 @@ let SignalB_diag =
     | where ResourceType == "VAULTS"
     | where OperationName in~ ("SecretGet", "SecretList")
     | where ResultType =~ "Success" or ResultSignature =~ "OK"
-    // filtra al secreto botin por la URI del request (…/secrets/automation-sp-secret/…)
+    // filter to the loot secret by the request URI (…/secrets/automation-sp-secret/…)
     | where OperationName == "SecretList" or requestUri_s has secret_name
     | project TimeGenerated,
               Signal = "B-data-plane",
-              Stage = "T1552.005 — exfil secreto (SecretGet)",
+              Stage = "T1552.005 — secret exfil (SecretGet)",
               OperationName,
-              Caller = identity_claim_oid_g,     // objectId del caller == principalId MI
+              Caller = identity_claim_oid_g,     // objectId of the caller == principalId of the MI
               CallerIpAddress = CallerIPAddress,
               VaultName = Resource,
               requestUri_s,
               ResultType;
 
 // ---------------------------------------------------------------------
-// SEÑAL B' — igual que B pero en tabla dedicada AZKVAuditLogs
-//           (modo resource-specific de los diagnostic settings).
-//           Descomentar si el vault emite a esta tabla en lugar de AzureDiagnostics.
+// SIGNAL B' — same as B but in the dedicated AZKVAuditLogs table
+//           (resource-specific mode of the diagnostic settings).
+//           Uncomment if the vault emits to this table instead of AzureDiagnostics.
 // ---------------------------------------------------------------------
 // let SignalB_kvaudit =
 //     AZKVAuditLogs
@@ -92,30 +92,30 @@ let SignalB_diag =
 //     | where OperationName == "SecretList" or id_s has secret_name
 //     | project TimeGenerated,
 //               Signal = "B-data-plane",
-//               Stage = "T1552.005 — exfil secreto (SecretGet)",
+//               Stage = "T1552.005 — secret exfil (SecretGet)",
 //               OperationName,
 //               Caller = identity_claim_oid_g,
-//               CallerIpAddress = CallerIPAddress,   // en AZKVAuditLogs la IP es CallerIPAddress (IP en mayusculas)
+//               CallerIpAddress = CallerIPAddress,   // in AZKVAuditLogs the IP is CallerIPAddress (IP uppercased)
 //               VaultName = tostring(split(_ResourceId, "/")[-1]),
 //               requestUri_s = id_s,
 //               ResultType;
 
 // =====================================================================
-// SALIDA 1 — Timeline unificado de todas las señales AP02.
-// Triage: una fila SEÑAL A (self-grant) seguida de B (SecretGet) por el
-// mismo Caller en minutos ES la cadena AP02 completa.
+// OUTPUT 1 — Unified timeline of all AP02 signals.
+// Triage: a SIGNAL A row (self-grant) followed by B (SecretGet) by the
+// same Caller within minutes IS the full AP02 chain.
 // =====================================================================
 union isfuzzy=true SignalA_mgmt, SignalB_diag
 | sort by TimeGenerated asc
 
 // =====================================================================
-// SALIDA 2 (alta fidelidad) — Correlacion self-grant -> SecretGet por el
-// MISMO principal dentro de corr_window. Casi cero falsos positivos:
-// es exactamente el pivote que la remediacion (RBAC / menor privilegio)
-// debe hacer imposible. Descomentar para usar como regla de alerta.
+// OUTPUT 2 (high fidelity) — Correlate self-grant -> SecretGet by the
+// SAME principal within corr_window. Near-zero false positives:
+// it is exactly the pivot that remediation (RBAC / least privilege)
+// must make impossible. Uncomment to use as an alert rule.
 // =====================================================================
 // SignalA_mgmt
-// | where OperationNameValue has "KEYVAULT"            // solo el self-grant sobre el vault
+// | where OperationNameValue has "KEYVAULT"            // only the self-grant on the vault
 // | project GrantTime = TimeGenerated, Principal = Caller, GrantIp = CallerIpAddress, OperationNameValue
 // | join kind=inner (
 //     SignalB_diag

@@ -1,41 +1,41 @@
-title: Low-Priv Owner Self-Add to Role-Assignable Group Carrying Privileged Role Administrator (Caelum AP03)
+title: Low-Priv Owner Self-Add to Role-Assignable Group Carrying Privileged Role Administrator (Azure Attack Range AP03)
 id: c7e4a9b2-3f81-4d6e-9a05-1b2c3d4e5f60
 status: experimental
 description: >
-  Detecta la cadena AP03: un usuario de BAJO privilegio que es OWNER de un grupo
-  role-assignable (isAssignableToRole=true) que porta el rol de directorio
-  'Privileged Role Administrator' se AUTO-ANADE a la membership del grupo
-  ('Add member to group' con el iniciador == el miembro anadido). Por diseno de
-  Entra, la membership de un grupo role-assignable solo la pueden modificar Global
-  Admin, Privileged Role Admin y los OWNERS, de modo que el self-add del owner no
-  requiere rol de administrador (T1098). Al entrar hereda PRA (asignado al grupo,
-  T1098.003) y con el se auto-asigna Global Administrator (T1078.004). La regla
-  tambien cubre la asignacion de un rol de directorio privilegiado a un grupo y la
-  concesion de Global Administrator. El tentativo 'T1484.003' del catalogo no existe
-  en ATT&CK y se sustituye por el set validado T1098 / T1098.003 / T1078.004.
+  Detects the AP03 chain: a LOW-privilege user who is OWNER of a role-assignable
+  group (isAssignableToRole=true) carrying the directory role 'Privileged Role
+  Administrator' SELF-ADDS to the group membership ('Add member to group' with the
+  initiator == the added member). By Entra design, the membership of a
+  role-assignable group can only be modified by Global Admin, Privileged Role Admin
+  and the OWNERS, so the owner's self-add requires no administrator role (T1098).
+  On joining, the user inherits PRA (assigned to the group, T1098.003) and uses it
+  to self-assign Global Administrator (T1078.004). The rule also covers assigning a
+  privileged directory role to a group and granting Global Administrator. The
+  tentative 'T1484.003' from the catalog does not exist in ATT&CK and is replaced
+  by the validated set T1098 / T1098.003 / T1078.004.
 references:
   - https://attack.mitre.org/techniques/T1098/
   - https://attack.mitre.org/techniques/T1098/003/
   - https://attack.mitre.org/techniques/T1078/004/
   - https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/groups-concept
   - https://learn.microsoft.com/en-us/entra/identity/monitoring-health/reference-azure-monitor-audit-log-schema
-author: Caelum Range
+author: Azure Attack Range
 date: 2026-11-14
 logsource:
   product: azure
   service: auditlogs
 detection:
-  # --- Etapa 3 (T1098): alta de miembro en el grupo role-assignable objetivo ---
+  # --- Stage 3 (T1098): member added to the target role-assignable group ---
   selection_addmember:
     OperationName: 'Add member to group'
-  # --- Precondicion/persistencia (T1098): alta de owner sobre el mismo grupo ---
+  # --- Precondition/persistence (T1098): owner added on the same group ---
   selection_addowner:
     OperationName: 'Add owner to group'
-  # Ancla al grupo privilegiado del lab (ajustar al lab_prefix real).
+  # Anchor to the lab's privileged group (adjust to the actual lab_prefix).
   selection_group:
-    TargetResources|contains: 'caelum-ap03-role-admins'
-  # --- Etapas 2/5 (T1098.003 / T1078.004): asignacion de rol de directorio
-  #     privilegiado (PRA al grupo) o self-grant de Global Administrator ---
+    TargetResources|contains: 'azrange-ap03-role-admins'
+  # --- Stages 2/5 (T1098.003 / T1078.004): assignment of a privileged directory
+  #     role (PRA to the group) or self-grant of Global Administrator ---
   selection_roleops:
     OperationName:
       - 'Add member to role'
@@ -55,31 +55,31 @@ fields:
   - TargetResources
   - Result
 falsepositives:
-  - Provisioning legitimo del grupo role-assignable y su rol via IaC autorizado
-    (Terraform/Bicep) — correlacionar con el principal de automatizacion esperado
-  - Un administrador (GA/PRA) gestionando owners o membership del grupo por cambio
-    aprobado; investigar cuando el iniciador es un usuario de bajo privilegio
-  - Nota de alta fidelidad: un 'Add member to group' en el que InitiatedBy.user.id
-    == TargetResources[0].id (self-add) sobre un grupo role-assignable es de muy
-    baja tasa de falso positivo — ver AP03-role-assignable-group.kql (SALIDA 2)
+  - Legitimate provisioning of the role-assignable group and its role via authorized
+    IaC (Terraform/Bicep) - correlate with the expected automation principal
+  - An administrator (GA/PRA) managing the group's owners or membership via an
+    approved change; investigate when the initiator is a low-privilege user
+  - High-fidelity note: an 'Add member to group' where InitiatedBy.user.id
+    == TargetResources[0].id (self-add) on a role-assignable group has a very
+    low false-positive rate - see AP03-role-assignable-group.kql (OUTPUT 2)
 level: high
 tags:
   - attack.persistence
-  - attack.t1098               # self-add del owner a la membership del grupo que posee
+  - attack.t1098               # owner self-add to the membership of the group they own
   - attack.privilege_escalation
-  - attack.t1098.003           # herencia de Privileged Role Administrator via pertenencia al grupo
-  - attack.t1078.004           # ejercer PRA para auto-asignarse Global Administrator (toma del tenant)
+  - attack.t1098.003           # inheritance of Privileged Role Administrator via group membership
+  - attack.t1078.004           # exercise PRA to self-assign Global Administrator (tenant takeover)
 # ---------------------------------------------------------------------
-# Mapeo senal -> etapa del ataque AP03:
-#   selection_addmember + selection_group -> Etapa 3: owner self-add a la
-#        membership del grupo role-assignable (clave: initiator == member)   [T1098]
-#   selection_addowner  + selection_group -> Precondicion/persistencia: alta
-#        de owner delegado de bajo privilegio sobre el grupo                 [T1098]
+# Signal -> AP03 attack stage mapping:
+#   selection_addmember + selection_group -> Stage 3: owner self-add to the
+#        membership of the role-assignable group (key: initiator == member)    [T1098]
+#   selection_addowner  + selection_group -> Precondition/persistence: adding a
+#        low-privilege delegated owner on the group                            [T1098]
 #   selection_roleops + 'Privileged Role Administrator' (target Group) ->
-#        Etapa 2: PRA asignado AL GRUPO -> sus miembros lo heredan           [T1098.003]
-#   selection_roleops + 'Global Administrator' -> Etapa 5: self-grant final
-#        de Global Administrator ejerciendo PRA                              [T1078.004]
-# La herencia del rol al entrar en el grupo NO emite evento propio; la senal
-# observable es el 'Add member to group'. El discriminante initiator==member
-# (self-add) se evalua en el KQL companero (AuditLogs, InitiatedBy.user.id).
+#        Stage 2: PRA assigned TO THE GROUP -> its members inherit it          [T1098.003]
+#   selection_roleops + 'Global Administrator' -> Stage 5: final self-grant
+#        of Global Administrator by exercising PRA                             [T1078.004]
+# Inheriting the role on joining the group emits NO event of its own; the
+# observable signal is the 'Add member to group'. The initiator==member
+# (self-add) discriminant is evaluated in the companion KQL (AuditLogs, InitiatedBy.user.id).
 # ---------------------------------------------------------------------

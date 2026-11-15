@@ -1,6 +1,6 @@
 // =====================================================================
-// AP01 — Illicit consent grant → high-value Graph scopes
-// Fuente: Entra ID Audit Logs (tabla AuditLogs en Sentinel / Defender XDR)
+// AP01 — Illicit consent grant -> high-value Graph scopes
+// Source: Entra ID Audit Logs (AuditLogs table in Sentinel / Defender XDR)
 // MITRE: T1528, T1098.003
 // =====================================================================
 AuditLogs
@@ -10,7 +10,7 @@ AuditLogs
                           tostring(InitiatedBy.user.userPrincipalName),
                           tostring(InitiatedBy.app.displayName))
 | extend IpAddress   = tostring(InitiatedBy.user.ipAddress)
-// Extrae los scopes consentidos desde ModifiedProperties
+// Extract the consented scopes from ModifiedProperties
 | mv-apply Prop = ModifiedProperties on (
       where tostring(Prop.displayName) in ("ConsentAction.Permissions", "DelegatedPermissionGrant.Scope")
     | extend ConsentedScopes = tostring(Prop.newValue)

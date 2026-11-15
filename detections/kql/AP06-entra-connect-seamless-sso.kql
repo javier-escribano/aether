@@ -1,86 +1,86 @@
 // =====================================================================
-// AP06 — Entra Connect / Seamless SSO (AZUREADSSOACC$): puente on-prem -> cloud
-//        Cadena: el atacante parte de la credencial de la cuenta de SINCRONIZACION
-//        de Entra Connect (CAELUM\Sync_CAELUM) sembrada con derechos DCSync  ->
-//        hace DCSync (4662 + GUID de replicacion) para extraer las claves Kerberos
-//        de la cuenta de maquina AZUREADSSOACC$  ->  FORJA un silver ticket para
-//        el SPN HTTP/autologon.microsoftazuread-sso.com suplantando a CUALQUIER
-//        usuario sincronizado  ->  autentica a la NUBE como ese usuario SIN su
-//        password. El compromiso on-prem SALTA a Entra ID.
+// AP06 — Entra Connect / Seamless SSO (AZUREADSSOACC$): on-prem -> cloud bridge
+//        Chain: the attacker starts from the credential of the Entra Connect
+//        SYNCHRONIZATION account (AZRANGE\Sync_AZRANGE) seeded with DCSync
+//        rights  ->  performs DCSync (4662 + replication GUID) to extract the
+//        Kerberos keys of the machine account AZUREADSSOACC$  ->  FORGES a silver
+//        ticket for the SPN HTTP/autologon.microsoftazuread-sso.com impersonating ANY
+//        synchronized user  ->  authenticates to the CLOUD as that user WITHOUT their
+//        password. The on-prem compromise JUMPS to Entra ID.
 //
-//        DEBILIDAD ESTRELLA (lo que diferencia AP06 de AP05, que termina en DCSync
-//        on-prem): la password de AZUREADSSOACC$ NUNCA se rota por defecto (al
-//        contrario que las cuentas de maquina normales, que rotan cada 30 dias) ->
-//        su hash, robado una vez, vale para SIEMPRE = persistencia eterna.
+//        FLAGSHIP WEAKNESS (what sets AP06 apart from AP05, which ends in DCSync
+//        on-prem): the password of AZUREADSSOACC$ is NEVER rotated by default (unlike
+//        normal machine accounts, which rotate every 30 days) ->
+//        its hash, stolen once, is valid FOREVER = eternal persistence.
 //
-// Fuente: eventos de SEGURIDAD de Windows del DC hibrido (on-prem en Azure IaaS,
-//         el MISMO DC compartido con AP05), ingeridos en Log Analytics / Sentinel
-//         via Azure Monitor Agent (AMA) + Data Collection Rule. Tabla: SecurityEvent.
-//         AP06 cubre SOLO la pata ON-PREM: la autenticacion efectiva a la NUBE con
-//         el ticket forjado se veria en Entra ID (SigninLogs de Seamless SSO /
-//         AADServicePrincipalSignInLogs), pero el lab NO provisiona el tenant ni
-//         Entra Connect -> esa pata se DECLARA no cubierta (igual que AP05 declara
-//         que no hay AuditLogs/SigninLogs). Ver "LIMITE CLOUD" al final.
+// Source: Windows SECURITY events from the hybrid DC (on-prem in Azure IaaS,
+//         the SAME DC shared with AP05), ingested into Log Analytics / Sentinel
+//         via Azure Monitor Agent (AMA) + Data Collection Rule. Table: SecurityEvent.
+//         AP06 covers ONLY the ON-PREM leg: the effective authentication to the CLOUD with
+//         the forged ticket would be seen in Entra ID (SigninLogs of Seamless SSO /
+//         AADServicePrincipalSignInLogs), but the lab does NOT provision the tenant or
+//         Entra Connect -> that leg is DECLARED not covered (just as AP05 declares
+//         there are no AuditLogs/SigninLogs). See "CLOUD LIMIT" at the end.
 //
-// MITRE:  T1552     (Unsecured Credentials: la cred de sync de Entra Connect con DCSync)
-//         T1003.006 (OS Credential Dumping: DCSync — extrae las claves de AZUREADSSOACC$) [NUCLEO]
-//         T1558.001 (Steal or Forge Kerberos Tickets: Silver Ticket sobre AZUREADSSOACC$)
-//         T1550     (Use Alternate Authentication Material: el ticket forjado autentica a la NUBE)
+// MITRE:  T1552     (Unsecured Credentials: the Entra Connect sync credential with DCSync)
+//         T1003.006 (OS Credential Dumping: DCSync — extracts the keys of AZUREADSSOACC$) [CORE]
+//         T1558.001 (Steal or Forge Kerberos Tickets: Silver Ticket over AZUREADSSOACC$)
+//         T1550     (Use Alternate Authentication Material: the forged ticket authenticates to the CLOUD)
 //
-// EVENTOS (Windows Security):
-//   4662  Se realizo una operacion sobre un objeto de Directory Service (DCSync =
-//         Access con los GUID de propiedad de replicacion DS-Replication-Get-Changes)
-//   4769  Se solicito un ticket de servicio Kerberos (TGS) — aqui para el SPN de
-//         Seamless SSO (hunt del silver ticket, CON caveat; ver SENAL B)
-//   4741  Se creo una cuenta de equipo (el sembrado de AZUREADSSOACC$)
-//   4742  Se cambio una cuenta de equipo (SPNs / password de AZUREADSSOACC$)
+// EVENTS (Windows Security):
+//   4662  An operation was performed on a Directory Service object (DCSync =
+//         Access with the replication property GUIDs DS-Replication-Get-Changes)
+//   4769  A Kerberos service ticket (TGS) was requested — here for the SPN of
+//         Seamless SSO (silver ticket hunt, WITH caveat; see SIGNAL B)
+//   4741  A computer account was created (the seeding of AZUREADSSOACC$)
+//   4742  A computer account was changed (SPNs / password of AZUREADSSOACC$)
 //
-// PRERREQUISITO DE AUDITORIA (lo habilita seed-ap06, gated en enable_ap06, NO la DSC
-// compartida — asi AP05 queda intacto; es idempotente y persiste entre seed/-Remediate):
+// AUDIT PREREQUISITE (enabled by seed-ap06, gated on enable_ap06, NOT the shared DSC
+// — so AP05 stays intact; it is idempotent and persists across seed/-Remediate):
 //   auditpol /set /subcategory:"Directory Service Access"            /success:enable /failure:enable  (4662)
 //   auditpol /set /subcategory:"Kerberos Service Ticket Operations"  /success:enable                   (4769)
 //   auditpol /set /subcategory:"Computer Account Management"         /success:enable                   (4741/4742)
-//   4662 ADEMAS requiere una SACL de auditoria sobre el naming context del dominio;
-//   SIN auditoria + SACL el evento NO se genera y la deteccion dispara en vacio.
+//   4662 ALSO requires an audit SACL on the domain naming context;
+//   WITHOUT audit + SACL the event is NOT generated and the detection fires empty.
 //
-// CAVEATS DEL ESQUEMA REAL DE SecurityEvent (verificado contra la referencia de
-// tablas de Azure Monitor):
-//   * Los GUID de propiedad de 4662 (DS-Replication-Get-Changes) NO son una columna
-//     dedicada: viajan dentro de 'Properties' (y, de respaldo, en el XML crudo de
-//     'EventData'). Se buscan en ambas ubicaciones con OR (nunca un AND que descarte
-//     una rama — leccion de AP04/AP05/AP07).
-//   * 4662 es ALTO VOLUMEN y la cuenta de sync REAL de Azure AD Connect genera
-//     DCSync legitimo constante -> en produccion se hace allowlist de la cuenta de
-//     sync conocida. En el lab, el DCSync de la cuenta sembrada ES la senal.
-//   * 4769: SecurityEvent expone ServiceName / TicketEncryptionType como columnas;
-//     si tu pipeline no las promueve, se extraen del XML de 'EventData'. RC4 = 0x17.
-//   * El SID objetivo del DCSync (naming context / AZUREADSSOACC$) NO siempre se
-//     promueve: la firma fuerte es GUID de replicacion + SubjectUserName = cuenta de sync.
+// CAVEATS OF THE REAL SecurityEvent SCHEMA (verified against the Azure Monitor
+// table reference):
+//   * The 4662 property GUIDs (DS-Replication-Get-Changes) are NOT a dedicated
+//     column: they travel inside 'Properties' (and, as a fallback, in the raw XML of
+//     'EventData'). They are searched in both locations with OR (never an AND that discards
+//     a branch — lesson from AP04/AP05/AP07).
+//   * 4662 is HIGH VOLUME and the REAL Azure AD Connect sync account generates
+//     constant legitimate DCSync -> in production the known sync account is
+//     allowlisted. In the lab, the DCSync by the seeded account IS the signal.
+//   * 4769: SecurityEvent exposes ServiceName / TicketEncryptionType as columns;
+//     if your pipeline does not promote them, they are extracted from the XML of 'EventData'. RC4 = 0x17.
+//   * The target SID of the DCSync (naming context / AZUREADSSOACC$) is NOT always
+//     promoted: the strong signature is replication GUID + SubjectUserName = the sync account.
 //
-// COMPLEMENTO: Microsoft Defender for Identity trae deteccion nativa de "Suspected
-//              DCSync attack" y "Suspected Golden/Silver Ticket". Usar en paralelo.
-//              Si existe un tenant real, complementar con una KQL sobre SigninLogs
-//              de Seamless SSO (autologon.microsoftazuread-sso.com) — ver LIMITE CLOUD.
+// SUPPLEMENT: Microsoft Defender for Identity brings native detection of "Suspected
+//             DCSync attack" and "Suspected Golden/Silver Ticket". Use in parallel.
+//             If a real tenant exists, supplement with a KQL over SigninLogs
+//             of Seamless SSO (autologon.microsoftazuread-sso.com) — see CLOUD LIMIT.
 //
-// Autor: Caelum Range   Fecha: 2026-11-15
+// Author: Azure Attack Range   Date: 2026-11-15
 // =====================================================================
 
-let sso_account   = "AZUREADSSOACC";      // = var.sso_account_name  (output ap06_sso_account sin el '$')
-let sync_account  = "Sync_CAELUM";        // = var.sync_account_name (output ap06_sync_account)
-let sso_spn       = "autologon.microsoftazuread-sso.com";  // SPN que valida Entra y que cazan las detecciones
-// GUID de propiedades de replicacion de directorio (la firma de DCSync):
+let sso_account   = "AZUREADSSOACC";      // = var.sso_account_name  (output ap06_sso_account without the '$')
+let sync_account  = "Sync_AZRANGE";       // = var.sync_account_name (output ap06_sync_account)
+let sso_spn       = "autologon.microsoftazuread-sso.com";  // SPN that Entra validates and that the detections catch
+// Directory replication property GUIDs (the DCSync signature):
 let repl_changes     = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";  // DS-Replication-Get-Changes
 let repl_changes_all = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";  // DS-Replication-Get-Changes-All
 let lookback      = 1d;
-let corr_window   = 10m;                  // ventana DCSync(4662) -> TGS SSO(4769) para la SALIDA 2
+let corr_window   = 10m;                  // window DCSync(4662) -> TGS SSO(4769) for OUTPUT 2
 
 // ---------------------------------------------------------------------
-// SENAL A (ESTRELLA) — T1003.006: DCSync. 4662 (Directory Service Access) cuyo
-//           'Properties' contiene los GUID de replicacion DS-Replication-Get-Changes
-//           y/o -All, por la cuenta de SINCRONIZACION, sobre el naming context /
-//           AZUREADSSOACC$. Es la firma de la extraccion de las claves Kerberos de
-//           AZUREADSSOACC$. En el lab, la cuenta de sync sembrada haciendo DCSync ES
-//           la senal; en prod se allowlista la cuenta de Azure AD Connect legitima.
+// SIGNAL A (FLAGSHIP) — T1003.006: DCSync. 4662 (Directory Service Access) whose
+//           'Properties' contains the replication GUIDs DS-Replication-Get-Changes
+//           and/or -All, by the SYNCHRONIZATION account, over the naming context /
+//           AZUREADSSOACC$. It is the signature of extracting the Kerberos keys of
+//           AZUREADSSOACC$. In the lab, the seeded sync account doing DCSync IS
+//           the signal; in prod the legitimate Azure AD Connect account is allowlisted.
 // ---------------------------------------------------------------------
 let SignalA_dcsync =
     SecurityEvent
@@ -90,7 +90,7 @@ let SignalA_dcsync =
          or EventData has repl_changes or EventData has repl_changes_all
     | project TimeGenerated,
               Signal   = "A-dcsync-4662",
-              Stage    = "T1003.006 — DCSync (GUID de replicacion) = extraccion de claves de AZUREADSSOACC$",
+              Stage    = "T1003.006 — DCSync (replication GUID) = extraction of the keys of AZUREADSSOACC$",
               EventID,
               Actor    = SubjectUserName,
               Host     = Computer,
@@ -100,14 +100,14 @@ let SignalA_dcsync =
               AccessMask;
 
 // ---------------------------------------------------------------------
-// SENAL B (HUNT silver ticket, CAVEAT LOAD-BEARING) — 4769: TGS Kerberos para el
-//           SPN de Seamless SSO (HTTP/autologon.microsoftazuread-sso.com o
-//           AZUREADSSOACC$), con interes en cifrado RC4 (0x17).
-//   *** CAVEAT CRITICO ***: un silver ticket FORJADO OFFLINE con la clave robada
-//           NO pasa por el KDC -> a menudo NO genera 4769 en el DC. Por eso esta
-//           senal es un HUNT / baseline (captura el trafico Seamless SSO legitimo y
-//           anomalias de TGS), NUNCA un AND gate de la cadena: exigir 4769 descartaria
-//           silenciosamente el propio forge (el mismo error que evitamos en AP07).
+// SIGNAL B (silver ticket HUNT, LOAD-BEARING CAVEAT) — 4769: Kerberos TGS for the
+//           Seamless SSO SPN (HTTP/autologon.microsoftazuread-sso.com or
+//           AZUREADSSOACC$), with interest in RC4 encryption (0x17).
+//   *** CRITICAL CAVEAT ***: a silver ticket FORGED OFFLINE with the stolen key
+//           does NOT pass through the KDC -> it often does NOT generate a 4769 on the DC.
+//           That is why this signal is a HUNT / baseline (it captures legitimate Seamless
+//           SSO traffic and TGS anomalies), NEVER an AND gate of the chain: requiring 4769
+//           would silently discard the forge itself (the same mistake we avoid in AP07).
 // ---------------------------------------------------------------------
 let SignalB_sso_tgs =
     SecurityEvent
@@ -120,7 +120,7 @@ let SignalB_sso_tgs =
     | where SvcName has sso_account or SvcName contains sso_spn
     | project TimeGenerated,
               Signal   = "B-sso-tgs-4769",
-              Stage    = "T1558.001 — TGS para el SPN Seamless SSO (hunt; el forge offline puede NO generar 4769)",
+              Stage    = "T1558.001 — TGS for the Seamless SSO SPN (hunt; the offline forge may NOT generate 4769)",
               EventID,
               Actor    = TargetUserName,
               Host     = Computer,
@@ -129,11 +129,11 @@ let SignalB_sso_tgs =
               TicketEncryptionType = EncType;
 
 // ---------------------------------------------------------------------
-// SENAL C (visibilidad de seeding) — 4741 (cuenta de equipo creada) / 4742 (cuenta
-//           de equipo modificada) sobre AZUREADSSOACC$. El propio sembrado por
-//           seed-ap06 (crear AZUREADSSOACC$ con los SPNs) y el -Remediate (rotar su
-//           clave 2x) disparan aqui: el defensor VE plantarse / rotarse la vuln
-//           (analogo a 4899/4900 en AP05). 'TargetUserName' = AZUREADSSOACC$.
+// SIGNAL C (seeding visibility) — 4741 (computer account created) / 4742 (computer
+//           account modified) over AZUREADSSOACC$. The very seeding by
+//           seed-ap06 (creating AZUREADSSOACC$ with the SPNs) and the -Remediate (rotating its
+//           key 2x) fire here: the defender SEES the vuln being planted / rotated
+//           (analogous to 4899/4900 in AP05). 'TargetUserName' = AZUREADSSOACC$.
 // ---------------------------------------------------------------------
 let SignalC_ssoacct_change =
     SecurityEvent
@@ -143,8 +143,8 @@ let SignalC_ssoacct_change =
     | project TimeGenerated,
               Signal   = "C-ssoacct-change",
               Stage    = iff(EventID == 4741,
-                             "seeding — AZUREADSSOACC$ CREADA (4741)",
-                             "seeding/rotacion — AZUREADSSOACC$ MODIFICADA (4742)"),
+                             "seeding — AZUREADSSOACC$ CREATED (4741)",
+                             "seeding/rotation — AZUREADSSOACC$ MODIFIED (4742)"),
               EventID,
               Actor    = SubjectUserName,
               Host     = Computer,
@@ -152,26 +152,26 @@ let SignalC_ssoacct_change =
               TargetDomainName;
 
 // =====================================================================
-// SALIDA 1 — Timeline unificado de las 3 senales AP06 (INDEPENDIENTES).
-// Triage de la cadena completa (rompe):
-//   SENAL C (sembrado de AZUREADSSOACC$)  ->  SENAL A (4662: DCSync por la cuenta de
-//   sync = extraccion de las claves de AZUREADSSOACC$)  ->  SENAL B (4769 opcional:
-//   TGS del SPN SSO; el silver ticket puede NO tocar el DC). Cada senal dispara POR
-//   SI SOLA (union, NUNCA un AND global que descarte una rama cuando falta un evento).
+// OUTPUT 1 — Unified timeline of the 3 AP06 signals (INDEPENDENT).
+// Triage of the full chain (exploit):
+//   SIGNAL C (seeding of AZUREADSSOACC$)  ->  SIGNAL A (4662: DCSync by the sync
+//   account = extraction of the keys of AZUREADSSOACC$)  ->  SIGNAL B (4769 optional:
+//   TGS of the SSO SPN; the silver ticket may NOT touch the DC). Each signal fires ON
+//   ITS OWN (union, NEVER a global AND that discards a branch when an event is missing).
 // =====================================================================
 union isfuzzy=true SignalA_dcsync, SignalB_sso_tgs, SignalC_ssoacct_change
 | sort by TimeGenerated asc
 
 
 // =====================================================================
-// SALIDA 2 (alta fidelidad) — Correlacion DCSync -> TGS del SPN SSO.
-// 4662 DCSync (GUID de replicacion) por la cuenta de sync  ==>  dentro de
-// corr_window y en el mismo host, un 4769 para el SPN de Seamless SSO. OJO: el
-// CAVEAT de la SENAL B sigue en pie — un silver ticket FORJADO OFFLINE puede NO
-// generar el 4769, asi que esta correlacion es un BOOSTER de fidelidad para el caso
-// en que el atacante SI pida el TGS, NO un requisito de la cadena. Por eso se deja
-// COMENTADA y como complemento de la SALIDA 1 (union), no en su lugar. Descomentar
-// para alertar sobre el escenario "DCSync seguido de uso del SPN SSO".
+// OUTPUT 2 (high fidelity) — Correlate DCSync -> TGS of the SSO SPN.
+// 4662 DCSync (replication GUID) by the sync account  ==>  within
+// corr_window and on the same host, a 4769 for the Seamless SSO SPN. NOTE: the
+// CAVEAT of SIGNAL B still holds — a silver ticket FORGED OFFLINE may NOT
+// generate the 4769, so this correlation is a fidelity BOOSTER for the case
+// where the attacker DOES request the TGS, NOT a requirement of the chain. That is why it is left
+// COMMENTED and as a complement to OUTPUT 1 (union), not in its place. Uncomment
+// to alert on the scenario "DCSync followed by use of the SSO SPN".
 // =====================================================================
 // let dcsync_ssoacc =
 //     SecurityEvent
@@ -193,36 +193,36 @@ union isfuzzy=true SignalA_dcsync, SignalB_sso_tgs, SignalC_ssoacct_change
 // | join kind=inner sso_tgs on Host
 // | where TgsTime between (DcsyncTime .. (DcsyncTime + corr_window))
 // | project DcsyncTime, SyncActor, TgsTime, TgsUser, TgsIp, ServiceName,
-//           Alerta = "AP06: DCSync por la cuenta de sync -> TGS del SPN Seamless SSO (posible uso del silver ticket)"
+//           Alert = "AP06: DCSync by the sync account -> TGS of the Seamless SSO SPN (possible use of the silver ticket)"
 // | sort by DcsyncTime asc
 
 
 // ---------------------------------------------------------------------
-// PROPERTY HUNT (NO event-driven; declarado como complemento) — la DELACION de la
-// no-rotacion: AZUREADSSOACC$ con un PasswordLastSet ANTIGUO / inmovil. Las cuentas
-// de maquina normales rotan su password cada ~30 dias; AZUREADSSOACC$ NO tiene host
-// que la rote -> un PasswordLastSet viejo es justamente la primitiva de persistencia.
-// Esto NO esta en SecurityEvent: requiere una consulta LDAP periodica, p.ej. desde
-// el propio DC:
+// PROPERTY HUNT (NOT event-driven; declared as a complement) — the tell of
+// non-rotation: AZUREADSSOACC$ with an OLD / frozen PasswordLastSet. Normal machine
+// accounts rotate their password every ~30 days; AZUREADSSOACC$ has no host
+// to rotate it -> an old PasswordLastSet is precisely the persistence primitive.
+// This is NOT in SecurityEvent: it requires a periodic LDAP query, e.g. from
+// the DC itself:
 //   Get-ADComputer -Filter "sAMAccountName -eq 'AZUREADSSOACC$'" -Properties PasswordLastSet |
 //     Select-Object Name, PasswordLastSet
-//   # Alertar si (Get-Date) - PasswordLastSet > 30 dias.
-// En Sentinel, si inventarias objetos AD en una tabla custom, compara PasswordLastSet
-// contra el umbral alli; sin ese inventario, es un hunt manual/programado.
+//   # Alert if (Get-Date) - PasswordLastSet > 30 days.
+// In Sentinel, if you inventory AD objects into a custom table, compare PasswordLastSet
+// against the threshold there; without that inventory, it is a manual/scheduled hunt.
 // ---------------------------------------------------------------------
 
 
 // ---------------------------------------------------------------------
-// LIMITE CLOUD (DECLARADO, NO cubierto por el lab) — la pata que CIERRA la cadena:
-// la autenticacion EFECTIVA a la nube con el ticket forjado (T1550), suplantando a
-// un usuario sincronizado via Seamless SSO, se veria en Entra ID:
+// CLOUD LIMIT (DECLARED, NOT covered by the lab) — the leg that CLOSES the chain:
+// the EFFECTIVE authentication to the cloud with the forged ticket (T1550), impersonating
+// a synchronized user via Seamless SSO, would be seen in Entra ID:
 //   SigninLogs | where ResourceDisplayName has "autologon.microsoftazuread-sso.com"
-//              // o AppDisplayName / AuthenticationDetails del flujo Seamless SSO
-//   AADServicePrincipalSignInLogs  // para el SPN de Seamless SSO
-// El lab NO provisiona el tenant ni Entra Connect, asi que estas tablas NO existen
-// aqui: AP06 cubre SOLO la pata ON-PREM (igual que AP05 declara que no hay
-// AuditLogs/SigninLogs on-prem). Para cerrar la deteccion de extremo a extremo en un
-// entorno real: (1) Microsoft Defender for Identity (Suspected DCSync / Suspected
-// Golden/Silver Ticket, nativo sobre el trafico del DC), y (2) una KQL companera
-// sobre SigninLogs de Seamless SSO cuando exista un tenant conectado.
+//              // or AppDisplayName / AuthenticationDetails of the Seamless SSO flow
+//   AADServicePrincipalSignInLogs  // for the Seamless SSO SPN
+// The lab does NOT provision the tenant or Entra Connect, so these tables do NOT exist
+// here: AP06 covers ONLY the ON-PREM leg (just as AP05 declares there are no
+// on-prem AuditLogs/SigninLogs). To close end-to-end detection in a real
+// environment: (1) Microsoft Defender for Identity (Suspected DCSync / Suspected
+// Golden/Silver Ticket, native over the DC traffic), and (2) a companion KQL
+// over SigninLogs of Seamless SSO when a connected tenant exists.
 // ---------------------------------------------------------------------

@@ -1,0 +1,126 @@
+name: ci
+
+# ------------------------------------------------------------------
+# Azure Attack Range - CI: validates the IaC and the orchestrator scripts.
+#
+# What it checks (and why):
+#   * terraform fmt -check -recursive  -> canonical style across the 3 layers/modules.
+#   * terraform validate (matrix 1.6.6 + 1.17.2) -> consistency of the 8 attack paths.
+#       - 1.6.6 is the declared floor (required_version >= 1.6): if validate breaks
+#         there, the floor is a lie and must be raised.
+#       - validate needs NO Azure credentials: only `init -backend=false` pulls the
+#         providers; it never touches the tenant or the state. That is why this CI
+#         carries no secrets.
+#       - The committed .terraform.lock.hcl pins exact provider versions/hashes, so
+#         `-lockfile=readonly` keeps every run reproducible.
+#   * AST parse of the .ps1 scripts (orchestrator + seeds + verify): catches syntax
+#     errors before a seed ever reaches a real DC via `az vm run-command`.
+#
+# What it deliberately does NOT do:
+#   * No tfsec/checkov/trivy: this IaC is INTENTIONALLY vulnerable (that is the point
+#     of the range). A security scanner would flag all of it and keep CI permanently
+#     red. Security analysis lives in the detections (KQL/Sigma), not here.
+#   * It does not validate terraform/modules/hybrid-ad/dsc/AzRangeDC.ps1: it is a DSC
+#     `configuration` (Import-DscResource ActiveDirectoryDsc/CSDsc); the `configuration`
+#     keyword and those modules exist only in Windows PowerShell 5.1. The DSC engine
+#     validates it on the VM at deploy time, not this lint on Linux/pwsh.
+#   * It does not validate KQL/Sigma syntax (that needs a Sentinel backend/pipeline).
+#
+# Optional hardening: pin the actions to a full SHA (instead of @vN) and let Dependabot
+# bump them.
+# ------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# The CI only reads the repo. No secrets (validate needs no Azure access).
+permissions:
+  contents: read
+
+# One run per branch; cancel stale runs when a new push lands on top.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.2"
+      - name: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: terraform validate (tf ${{ matrix.terraform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform: ["1.6.6", "1.17.2"]
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform }}
+      - name: terraform init (no backend, no credentials, pinned lockfile)
+        run: terraform init -backend=false -input=false -lockfile=readonly
+      - name: terraform validate
+        run: terraform validate -no-color
+
+  powershell:
+    name: powershell parse + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: AST parse check of the .ps1 scripts (excludes dsc/)
+        shell: pwsh
+        run: |
+          $utf8 = New-Object System.Text.UTF8Encoding $false
+          $root = (Get-Location).Path
+          $fail = $false
+          $files = Get-ChildItem -Recurse -Filter *.ps1 | Where-Object { $_.FullName -notmatch '[/\\]dsc[/\\]' }
+          if (-not $files -or $files.Count -lt 1) { throw 'No .ps1 files found to parse (layout changed?). The gate validated nothing.' }
+          Write-Host "Parsing $($files.Count) script(s)..."
+          foreach ($f in $files) {
+            $errors = $null
+            $txt = [System.IO.File]::ReadAllText($f.FullName, $utf8)
+            [System.Management.Automation.Language.Parser]::ParseInput($txt, [ref]$null, [ref]$errors) | Out-Null
+            $rel = [System.IO.Path]::GetRelativePath($root, $f.FullName)
+            if ($errors -and $errors.Count -gt 0) {
+              $fail = $true
+              foreach ($e in $errors) {
+                Write-Host "::error file=$rel,line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              }
+            } else {
+              Write-Host "ok: $rel"
+            }
+          }
+          if ($fail) { throw 'Syntax errors in one or more PowerShell scripts.' }
+      - name: PSScriptAnalyzer (Error severity, informational)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -ErrorAction Stop
+          $files = Get-ChildItem -Recurse -Filter *.ps1 | Where-Object { $_.FullName -notmatch '[/\\]dsc[/\\]' }
+          $findings = foreach ($f in $files) { Invoke-ScriptAnalyzer -Path $f.FullName -Severity Error }
+          if ($findings) {
+            $findings | Format-Table RuleName, ScriptName, Line, Message -AutoSize
+            Write-Host "::warning::PSScriptAnalyzer reported $($findings.Count) Error-severity finding(s) (informational; the blocking gate is the AST parse above)."
+          } else {
+            Write-Host 'PSScriptAnalyzer (Error): clean.'
+          }

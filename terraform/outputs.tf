@@ -1,298 +1,298 @@
 output "lab_users" {
-  description = "UPNs de los usuarios ficticios creados."
+  description = "UPNs of the dummy users created."
   value       = module.entra_identity.user_principal_names
 }
 
 output "ap01_app_id" {
-  description = "Client ID del app vulnerable de AP01 (null si AP01 está desactivado)."
+  description = "Client ID of the AP01 vulnerable app (null if AP01 is disabled)."
   value       = module.entra_identity.ap01_app_id
 }
 
 output "ap01_consent_url" {
-  description = "URL de consentimiento del app vulnerable — el alumno observa el flujo de illicit consent."
+  description = "Consent URL of the vulnerable app — the student observes the illicit consent flow."
   value       = module.entra_identity.ap01_consent_url
 }
 
-# --- AP02 (null si enable_ap02 = false) ---
+# --- AP02 (null if enable_ap02 = false) ---
 output "ap02_vm_public_ip" {
-  description = "IP pública SSH del host pivote caelum-ap02-web."
+  description = "SSH public IP of the azrange-ap02-web pivot host."
   value       = module.azure_resources.ap02_vm_public_ip
 }
 
 output "ap02_key_vault_name" {
-  description = "Nombre del Key Vault con el secreto botín."
+  description = "Name of the Key Vault holding the loot secret."
   value       = module.azure_resources.ap02_key_vault_name
 }
 
 output "ap02_storage_account" {
-  description = "Storage account objetivo del movimiento lateral."
+  description = "Storage account targeted by the lateral movement."
   value       = module.azure_resources.ap02_storage_account
 }
 
 output "ap02_attacker_hint" {
-  description = "Pista didáctica del primer pivote de AP02 (robo de token vía IMDS)."
+  description = "Teaching hint for AP02's first pivot (token theft via IMDS)."
   value       = module.azure_resources.ap02_attacker_hint
 }
 
-# --- AP03 (null si enable_ap03 = false) ---
+# --- AP03 (null if enable_ap03 = false) ---
 output "ap03_group_object_id" {
-  description = "Object ID del grupo role-assignable de AP03."
+  description = "Object ID of AP03's role-assignable group."
   value       = module.entra_identity.ap03_group_object_id
 }
 
 output "ap03_target_role" {
-  description = "Rol de directorio que el grupo de AP03 porta (botín de la escalada)."
+  description = "Directory role carried by the AP03 group (the escalation loot)."
   value       = module.entra_identity.ap03_target_role
 }
 
 output "ap03_attacker_hint" {
-  description = "Pista didáctica del primer paso de AP03 (self-add como owner)."
+  description = "Teaching hint for AP03's first step (self-add as owner)."
   value       = module.entra_identity.ap03_attacker_hint
 }
 
-# --- AP04 (null si enable_ap04 = false) ---
+# --- AP04 (null if enable_ap04 = false) ---
 output "ap04_app_id" {
-  description = "Client ID del app registration vulnerable de AP04 (null si AP04 desactivado)."
+  description = "Client ID of AP04's vulnerable app registration (null if AP04 disabled)."
   value       = module.entra_identity.ap04_app_id
 }
 
 output "ap04_sp_object_id" {
-  description = "Object ID del service principal de AP04 (principal del app_role_assignment de Graph)."
+  description = "Object ID of AP04's service principal (principal of the Graph app_role_assignment)."
   value       = module.entra_identity.ap04_sp_object_id
 }
 
 output "ap04_graph_app_role" {
-  description = "App role de Microsoft Graph que porta el SP de AP04 (botín de la escalada)."
+  description = "Microsoft Graph app role carried by AP04's SP (the escalation loot)."
   value       = module.entra_identity.ap04_graph_app_role
 }
 
 output "ap04_attacker_hint" {
-  description = "Pista didáctica del primer paso de AP04 (owner añade credencial al app registration)."
+  description = "Teaching hint for AP04's first step (owner adds a credential to the app registration)."
   value       = module.entra_identity.ap04_attacker_hint
 }
 
-# --- AP05 (null si enable_ap05 = false) ---
+# --- AP05 (null if enable_ap05 = false) ---
 output "ap05_resource_group" {
-  description = "Resource group de AP05 (lo consume caelum.ps1 para el run-command del seed)."
+  description = "AP05 resource group (consumed by azrange.ps1 for the seed run-command)."
   value       = module.hybrid_ad.ap05_resource_group
 }
 
 output "ap05_dc_vm_name" {
-  description = "Nombre de la VM del DC+CA (centinela de AP05; lo consume caelum.ps1)."
+  description = "Name of the DC+CA VM (AP05 sentinel; consumed by azrange.ps1)."
   value       = module.hybrid_ad.ap05_dc_vm_name
 }
 
 output "ap05_dc_public_ip" {
-  description = "IP pública del DC (RDP solo desde admin_source_cidr)."
+  description = "DC public IP (RDP only from admin_source_cidr)."
   value       = module.hybrid_ad.ap05_dc_public_ip
 }
 
 output "ap05_domain_fqdn" {
-  description = "FQDN del bosque de usar-y-tirar de AP05."
+  description = "FQDN of AP05's throwaway forest."
   value       = module.hybrid_ad.ap05_domain_fqdn
 }
 
 output "ap05_domain_netbios" {
-  description = "NetBIOS del dominio de AP05 (lo consume caelum.ps1 para cualificar la credencial EA)."
+  description = "NetBIOS of AP05's domain (consumed by azrange.ps1 to qualify the EA credential)."
   value       = module.hybrid_ad.ap05_domain_netbios
 }
 
 output "ap05_ca_name" {
-  description = "Common Name de la Enterprise Root CA de AP05."
+  description = "Common Name of AP05's Enterprise Root CA."
   value       = module.hybrid_ad.ap05_ca_name
 }
 
 output "ap05_esc1_template_name" {
-  description = "Nombre de la plantilla vulnerable ESC1 (coincide con las detecciones)."
+  description = "Name of the vulnerable ESC1 template (matches the detections)."
   value       = module.hybrid_ad.ap05_esc1_template_name
 }
 
 output "ap05_lowpriv_upn" {
-  description = "UPN del usuario low-priv = credencial de arranque del atacante de AP05."
+  description = "UPN of the low-priv user = AP05 attacker's starting credential."
   value       = module.hybrid_ad.ap05_lowpriv_upn
 }
 
 output "ap05_attacker_hint" {
-  description = "Pista didáctica de AP05 (ruta ESC1 + aviso de coste/destroy)."
+  description = "Teaching hint for AP05 (ESC1 path + cost/destroy warning)."
   value       = module.hybrid_ad.ap05_attacker_hint
 }
 
 output "ap05_law_name" {
-  description = "Nombre del Log Analytics workspace de AP05 (null si telemetría off o workspace externo)."
+  description = "Name of AP05's Log Analytics workspace (null if telemetry off or external workspace)."
   value       = module.hybrid_ad.ap05_law_name
 }
 
 output "ap05_dc_admin_password" {
-  description = "Password del Administrator de dominio de AP05 (= EA)."
+  description = "AP05 domain Administrator password (= EA)."
   value       = module.hybrid_ad.ap05_dc_admin_password
   sensitive   = true
 }
 
 output "ap05_lowpriv_password" {
-  description = "Password del usuario low-priv de AP05 (credencial de arranque del atacante)."
+  description = "AP05 low-priv user password (attacker's starting credential)."
   value       = module.hybrid_ad.ap05_lowpriv_password
   sensitive   = true
 }
 
-# --- AP06 (null si enable_ap06 = false) ---
-# Entra Connect / Seamless SSO sobre el MISMO DC que AP05 (substrato compartido).
-# Centinela PROPIO ap06_dc_vm_name (NO reusa el de AP05): caelum.ps1/verify.ps1
-# lo consumen para el seed/health-check de AP06 sin envenenar el de AP05.
+# --- AP06 (null if enable_ap06 = false) ---
+# Entra Connect / Seamless SSO over the SAME DC as AP05 (shared substrate).
+# OWN sentinel ap06_dc_vm_name (does NOT reuse AP05's): azrange.ps1/verify.ps1
+# consume it for AP06's seed/health-check without poisoning AP05's.
 output "ap06_dc_vm_name" {
-  description = "Nombre de la VM del DC compartido visto desde AP06 (centinela de AP06; lo consume caelum.ps1/verify.ps1)."
+  description = "Name of the shared DC VM as seen from AP06 (AP06 sentinel; consumed by azrange.ps1/verify.ps1)."
   value       = module.hybrid_ad.ap06_dc_vm_name
 }
 
 output "ap06_resource_group" {
-  description = "Resource group del DC compartido visto desde AP06 (lo consume caelum.ps1 para el run-command del seed)."
+  description = "Resource group of the shared DC as seen from AP06 (consumed by azrange.ps1 for the seed run-command)."
   value       = module.hybrid_ad.ap06_resource_group
 }
 
 output "ap06_dc_public_ip" {
-  description = "IP pública del DC (RDP solo desde admin_source_cidr)."
+  description = "DC public IP (RDP only from admin_source_cidr)."
   value       = module.hybrid_ad.ap06_dc_public_ip
 }
 
 output "ap06_domain_fqdn" {
-  description = "FQDN del bosque de usar-y-tirar de AP06 (lo consume caelum.ps1 para el seed)."
+  description = "FQDN of AP06's throwaway forest (consumed by azrange.ps1 for the seed)."
   value       = module.hybrid_ad.ap06_domain_fqdn
 }
 
 output "ap06_domain_netbios" {
-  description = "NetBIOS del dominio de AP06 (lo consume caelum.ps1 para cualificar la credencial EA)."
+  description = "NetBIOS of AP06's domain (consumed by azrange.ps1 to qualify the EA credential)."
   value       = module.hybrid_ad.ap06_domain_netbios
 }
 
 output "ap06_sso_account" {
-  description = "Cuenta de máquina de Seamless SSO (AZUREADSSOACC$)."
+  description = "Seamless SSO machine account (AZUREADSSOACC$)."
   value       = module.hybrid_ad.ap06_sso_account
 }
 
 output "ap06_sso_spns" {
-  description = "SPNs de Seamless SSO (el 1º valida Entra y lo cazan las detecciones)."
+  description = "Seamless SSO SPNs (the 1st validates Entra and is hunted by the detections)."
   value       = module.hybrid_ad.ap06_sso_spns
 }
 
 output "ap06_sync_account" {
-  description = "Cuenta de sincronización de Entra Connect con derechos DCSync."
+  description = "Entra Connect sync account with DCSync rights."
   value       = module.hybrid_ad.ap06_sync_account
 }
 
 output "ap06_sso_mode" {
-  description = "Modo de siembra de AP06 (both / silver_ticket / sync_dcsync); lo consume caelum.ps1/verify.ps1."
+  description = "AP06 seeding mode (both / silver_ticket / sync_dcsync); consumed by azrange.ps1/verify.ps1."
   value       = module.hybrid_ad.ap06_sso_mode
 }
 
 output "ap06_law_name" {
-  description = "Nombre del Log Analytics workspace compartido visto desde AP06 (null si telemetría off o workspace externo)."
+  description = "Name of the shared Log Analytics workspace as seen from AP06 (null if telemetry off or external workspace)."
   value       = module.hybrid_ad.ap06_law_name
 }
 
 output "ap06_attacker_hint" {
-  description = "Pista didáctica de AP06 (puente on-prem→cloud: sync cred → DCSync → silver ticket → nube; aviso de coste/destroy)."
+  description = "Teaching hint for AP06 (on-prem→cloud bridge: sync cred → DCSync → silver ticket → cloud; cost/destroy warning)."
   value       = module.hybrid_ad.ap06_attacker_hint
 }
 
 output "ap06_dc_admin_password" {
-  description = "Password del Administrator de dominio visto desde AP06 (= EA). OBLIGATORIO para el seed en modo AP06-solo (enable_ap05=false). Aterriza en el ESTADO (sensible)."
+  description = "Domain Administrator password as seen from AP06 (= EA). REQUIRED for the seed in AP06-only mode (enable_ap05=false). Lands in STATE (sensitive)."
   value       = module.hybrid_ad.ap06_dc_admin_password
   sensitive   = true
 }
 
 output "ap06_sso_password" {
-  description = "Password FIJA de AZUREADSSOACC$ (permite derivar su clave RC4 para el forge del silver ticket). Aterriza en el ESTADO (sensible)."
+  description = "FIXED password of AZUREADSSOACC$ (allows deriving its RC4 key to forge the silver ticket). Lands in STATE (sensitive)."
   value       = module.hybrid_ad.ap06_sso_password
   sensitive   = true
 }
 
 output "ap06_sync_password" {
-  description = "Password de la cuenta de sincronización de AP06 (credencial de arranque del atacante). Aterriza en el ESTADO (sensible)."
+  description = "Password of AP06's sync account (attacker's starting credential). Lands in STATE (sensitive)."
   value       = module.hybrid_ad.ap06_sync_password
   sensitive   = true
 }
 
-# --- AP07 (null si enable_ap07 = false) ---
-# Punteros NO-secreto. La SAS/clave filtrada NUNCA se expone (vive solo en el tfstate).
+# --- AP07 (null if enable_ap07 = false) ---
+# NON-secret pointers. The leaked SAS/key is NEVER exposed (lives only in the tfstate).
 output "ap07_resource_group" {
-  description = "Resource group de AP07."
+  description = "AP07 resource group."
   value       = module.azure_resources.ap07_resource_group
 }
 
 output "ap07_storage_account" {
-  description = "Nombre de la storage account vulnerable de AP07 (centinela del bloque AP07 en verify.ps1)."
+  description = "Name of AP07's vulnerable storage account (sentinel of the AP07 block in verify.ps1)."
   value       = module.azure_resources.ap07_storage_account
 }
 
 output "ap07_public_container_url" {
-  description = "URL del contenedor público 'public' (añade ?restype=container&comp=list para la enumeración anónima T1619)."
+  description = "URL of the public 'public' container (append ?restype=container&comp=list for the anonymous T1619 enumeration)."
   value       = module.azure_resources.ap07_public_container_url
 }
 
 output "ap07_leaked_config_url" {
-  description = "URL anónima del blob filtrado backup-config.json (NO es secreto; la credencial está DENTRO)."
+  description = "Anonymous URL of the leaked backup-config.json blob (NOT a secret; the credential is INSIDE)."
   value       = module.azure_resources.ap07_leaked_config_url
 }
 
 output "ap07_private_container" {
-  description = "Nombre del contenedor privado con la joya (customers.csv)."
+  description = "Name of the private container with the crown jewel (customers.csv)."
   value       = module.azure_resources.ap07_private_container
 }
 
 output "ap07_law_name" {
-  description = "Nombre del Log Analytics workspace de AP07 (null si telemetría off o workspace externo)."
+  description = "Name of AP07's Log Analytics workspace (null if telemetry off or external workspace)."
   value       = module.azure_resources.ap07_law_name
 }
 
 output "ap07_attacker_hint" {
-  description = "Pista didáctica de la cadena de AP07 (enum anónima → descarga → pivote SAS/clave)."
+  description = "Teaching hint for the AP07 chain (anonymous enum → download → SAS/key pivot)."
   value       = module.azure_resources.ap07_attacker_hint
 }
 
-# --- AP08 (null si enable_ap08 = false) ---
-# Punteros de POSTURA. El password del atacante aterriza en el tfstate (sensible)
-# y SOLO se expone vía el output sensible ap08_attacker_password.
+# --- AP08 (null if enable_ap08 = false) ---
+# POSTURE pointers. The attacker's password lands in the tfstate (sensitive)
+# and is ONLY exposed via the sensitive output ap08_attacker_password.
 output "ap08_resource_group" {
-  description = "Resource group de AP08 (enable_ap08=false lo destruye, y con él toda role assignment de runtime RG-scoped)."
+  description = "AP08 resource group (enable_ap08=false destroys it, and with it every RG-scoped runtime role assignment)."
   value       = module.azure_resources.ap08_resource_group
 }
 
 output "ap08_automation_account" {
-  description = "Nombre del Automation Account vulnerable de AP08 (centinela del bloque AP08 en verify.ps1)."
+  description = "Name of AP08's vulnerable Automation Account (sentinel of the AP08 block in verify.ps1)."
   value       = module.azure_resources.ap08_automation_account
 }
 
 output "ap08_mi_principal_id" {
-  description = "Object ID de la system-assigned MI del Automation Account (= actor de la escalada). Pivote de detección: roleAssignments/write con Caller == este id = señal de oro."
+  description = "Object ID of the Automation Account's system-assigned MI (= escalation actor). Detection pivot: roleAssignments/write with Caller == this id = golden signal."
   value       = module.azure_resources.ap08_mi_principal_id
 }
 
 output "ap08_mi_role" {
-  description = "Rol over-priv que la MI ostenta sobre el RG de AP08 (User Access Administrator u Owner; ambos incluyen roleAssignments/write)."
+  description = "Over-priv role the MI holds over AP08's RG (User Access Administrator or Owner; both include roleAssignments/write)."
   value       = module.azure_resources.ap08_mi_role
 }
 
 output "ap08_runbook_name" {
-  description = "Nombre del runbook incrustado (señuelo caelum-ap08-maintenance). Null si runbook_mode='none' (misconfig pura)."
+  description = "Name of the embedded runbook (decoy azrange-ap08-maintenance). Null if runbook_mode='none' (pure misconfig)."
   value       = module.azure_resources.ap08_runbook_name
 }
 
 output "ap08_attacker_upn" {
-  description = "UPN del atacante low-priv (Automation Contributor) = credencial de arranque para disparar el runbook."
+  description = "UPN of the low-priv attacker (Automation Contributor) = starting credential to fire the runbook."
   value       = module.azure_resources.ap08_attacker_upn
 }
 
 output "ap08_attacker_password" {
-  description = "Password del atacante low-priv de AP08 (credencial de arranque). Aterriza en el ESTADO (sensible)."
+  description = "AP08 low-priv attacker password (starting credential). Lands in STATE (sensitive)."
   value       = module.azure_resources.ap08_attacker_password
   sensitive   = true
 }
 
 output "ap08_law_name" {
-  description = "Nombre del Log Analytics workspace de AP08 (null si telemetría off o workspace externo)."
+  description = "Name of AP08's Log Analytics workspace (null if telemetry off or external workspace)."
   value       = module.azure_resources.ap08_law_name
 }
 
 output "ap08_attacker_hint" {
-  description = "Pista didáctica de la cadena de AP08 (autenticarse como low-priv → lanzar runbook → el job corre como la MI → self-grant de Owner del RG)."
+  description = "Teaching hint for the AP08 chain (authenticate as low-priv → start runbook → the job runs as the MI → self-grant Owner of the RG)."
   value       = module.azure_resources.ap08_attacker_hint
 }

